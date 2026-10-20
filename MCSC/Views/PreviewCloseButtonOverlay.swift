@@ -105,11 +105,7 @@ final class PreviewCloseButtonOverlay: PreviewCloseButtonOverlayProtocol {
         didSet {
             buttonScale = MissionControlWindowButtonLayout(scale: buttonScale).scale
             guard buttonScale != oldValue else { return }
-            hide()
-            panel?.close()
-            panel = nil
-            buttonView = nil
-            actionViews.removeAll()
+            releasePanel()
         }
     }
 
@@ -118,7 +114,16 @@ final class PreviewCloseButtonOverlay: PreviewCloseButtonOverlayProtocol {
     }
 
     var isVisible: Bool {
-        panel?.isVisible ?? false
+        guard let panel else { return false }
+        return panel.isVisible && panel.isOnActiveSpace
+    }
+
+    private func releasePanel() {
+        hide()
+        panel?.close()
+        panel = nil
+        buttonView = nil
+        actionViews.removeAll()
     }
 
     private var currentAnchorOrigin: CGPoint = .zero
@@ -173,6 +178,13 @@ final class PreviewCloseButtonOverlay: PreviewCloseButtonOverlayProtocol {
     ///   - closeButtonFrame: Optional frame of the native close button for sub-pixel alignment.
     ///   - mode: The action mode to display (e.g. `.close`, `.minimize`, `.quit`, `.fullscreen`).
     func show(for previewFrame: CGRect, closeButtonFrame: CGRect? = nil, mode: Mode = .close) {
+        // WindowServer can leave a retained all-Spaces panel assigned only to
+        // older desktops after Spaces/fullscreen changes. AppKit still reports
+        // isVisible, and ordering it forward cannot repair that assignment.
+        if let panel, !panel.isOnActiveSpace {
+            AppLogger.missionControl.info("Recreating preview controls missing from the active Space")
+            releasePanel()
+        }
         // Lazily create the panel on first use so no GPU-backed layer
         // tree exists until the feature is actually triggered.
         if panel == nil {

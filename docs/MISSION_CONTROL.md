@@ -113,6 +113,7 @@ To prevent cross-space leakage and maintain zero-footprint performance, `SpaceMa
 3. **Empty Space Lists:** Windows with an empty space list (`[]`) are unassigned or visible across all spaces (such as floating tool windows, Finder panels, or menus) and are permitted on the active space.
 4. **No ScrollWheel Space Transitions:** Two-finger trackpad gestures emit `CGEventType.scrollWheel` events with horizontal deltas. The input event tap must NEVER treat `scrollWheel` as a Space transition; doing so prematurely resets hovered window targets and suppresses 2-finger swipe actions. Space transitions are strictly 3+ finger swipes or Ctrl+hotkeys.
 5. **Decoupled Target Resolution:** `previewWindow(at:)` must never be guarded by `isSpaceTransitioning`. Only visual overlay rendering (`updateOverlay`) is suppressed during space switches.
+6. **Panel Space Membership:** A retained all-Spaces panel can lose membership in the current desktop after desktop/fullscreen changes while `NSWindow.isVisible` remains true. Preview controls require both `isVisible` and `isOnActiveSpace`. Before showing a stranded panel, release it and lazily create a replacement; ordering it forward or reapplying collection behavior does not repair the stale assignment. This uses the existing refresh and adds no polling or persistent cache.
 
 ---
 
