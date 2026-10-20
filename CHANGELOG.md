@@ -1,8 +1,14 @@
 # Changelog
 
-## Unreleased
+## 0.9.2 (20 Oct 2026)
 
 - **Faster Hold to Quit**: Holding the Mission Control X now requests application quit after 0.75 seconds from mouse-down. The first 0.25 seconds still show no progress ring or shake; the visible progress fills over the remaining 0.5 seconds. Quick taps still close one window, and releasing between the tap and hold thresholds cancels.
+- **Validation**: The installed local build passed 14 interaction checks, including a 0.19-second tap closing one owned window, a 0.63-second release cancelling, and a 0.84-second hold requesting normal application quit before the old one-second threshold. Exit clears overlays and reentry restores the controls. Version metadata now identifies this timing update as 0.9.2, build 20.
+
+### Known limitations
+
+- The strict decimal 13 MB cold-launch gate has not passed in recent local baseline measurements (approximately 13.35–13.57 MB for the preceding build). Interaction memory is higher. Earlier scans also reported about 20 KB in Apple AppIntents/linkd XPC cycles; no zero-leak pass is claimed. Multiple physical displays were not available for validation.
+- Packaged builds require Apple Silicon and macOS 27.0 or later, use ad-hoc signing, and are not notarized. Updating may require removing and re-adding MCSC in System Settings → Privacy & Security → Accessibility. This fork does not update the upstream Homebrew tap.
 
 ## 0.9.1 (20 Oct 2026)
 
