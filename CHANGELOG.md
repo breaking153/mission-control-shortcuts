@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.9.1 (20 Oct 2026)
+
+- **Recover Missing Mission Control Buttons**: Fixed close, minimize, and fullscreen controls disappearing after desktop or fullscreen changes. WindowServer can leave a retained panel on older Spaces while AppKit still reports it as visible. MCSC now checks active-Space membership and lazily replaces stranded panels using the existing refresh, without adding polling or persistent caches.
+- **Validation**: Release build, static analysis, and code review passed. Local checks covered simulated panel Space loss, 12 repeated overview sessions, four native desktop selections, 32 tap/hold interactions, actual minimize/fullscreen actions, dragging with other labels visible, and three ordinary-launch reentry cycles after Accessibility authorization.
+
+### Known limitations
+
+- The strict decimal 13 MB cold-launch gate remains unmet: the latest authorized ordinary-launch samples were approximately 13.35–13.57 MB (12.74–12.94 MiB). Interaction memory is higher. A local leak scan reported about 20 KB in Apple AppIntents/linkd XPC cycles; this is not a zero-leak pass. Multiple physical displays were not available for validation.
+- Packaged builds require Apple Silicon and macOS 27.0 or later, use ad-hoc signing, and are not notarized. Updating may require removing and re-adding MCSC in System Settings → Privacy & Security → Accessibility. This fork does not update the upstream Homebrew tap.
+
 ## 0.9.0 (20 Oct 2026)
 
 - **Persistent Mission Control Labels**: Keep window titles and application icons visible. Settings independently control label position, icon placement, icon size, and title size. The hovered preview uses the native label to avoid duplicates. Labels appear at their final preview positions, stay visible for other windows during dragging, and hide promptly on overview exit or desktop changes.
