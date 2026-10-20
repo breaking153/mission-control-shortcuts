@@ -360,18 +360,18 @@ symbols in one lazily created panel. Settings → General → Mission Control �
 Button Size scales both the visible symbols and their larger adjacent hit
 cells from 75–200% (default 125%, giving each control a 50-point hit cell).
 The primary X retains its modifier actions. An unmodified quick tap lasting
-at most 0.25 seconds closes only the target window. Holding for one full
-second requests a normal application quit. Releasing between 0.25 and 1 second
+at most 0.25 seconds closes only the target window. Holding for 0.75 seconds
+from mouse-down requests a normal application quit. Releasing between 0.25 and 0.75 seconds
 cancels both actions. Application confirmation for unsaved documents remains
 in control of the owning application. Gesture-based window closing remains
 available.
 
 The first 0.25 seconds show no progress ring or press shake. After that grace
 period, a thin ring fades in around X and fills clockwise from 12 o'clock over
-the remaining 0.75 seconds, while symbol-only motion gradually increases at
+the remaining 0.5 seconds, while symbol-only motion gradually increases at
 nine cycles per second. Cancellation retracts the ring and
 damps the symbol's position and velocity over 280 ms, then fades the track for
-100 ms. A new press always receives a full second. Exit and panel hiding reset
+100 ms. A new press always receives a full 0.75 seconds. Exit and panel hiding reset
 all press feedback immediately. Two Core Animation shape layers are created
 only for the first press; no persistent animation timer or display link is used.
 

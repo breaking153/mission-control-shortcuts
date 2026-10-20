@@ -6,7 +6,7 @@ struct MissionControlCloseButtonPress {
     enum Action { case closeWindow, quitApplication }
 
     static let tapDuration: TimeInterval = 0.25
-    static let holdDuration: TimeInterval = 1.0
+    static let holdDuration: TimeInterval = 0.75
     let windowID: CGWindowID
     let processID: pid_t
     let sessionGeneration: UInt

@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Faster Hold to Quit**: Holding the Mission Control X now requests application quit after 0.75 seconds from mouse-down. The first 0.25 seconds still show no progress ring or shake; the visible progress fills over the remaining 0.5 seconds. Quick taps still close one window, and releasing between the tap and hold thresholds cancels.
+
 ## 0.9.1 (20 Oct 2026)
 
 - **Recover Missing Mission Control Buttons**: Fixed close, minimize, and fullscreen controls disappearing after desktop or fullscreen changes. WindowServer can leave a retained panel on older Spaces while AppKit still reports it as visible. MCSC now checks active-Space membership and lazily replaces stranded panels using the existing refresh, without adding polling or persistent caches.

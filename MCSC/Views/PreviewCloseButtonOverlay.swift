@@ -75,7 +75,7 @@ final class PreviewCloseButtonOverlay: PreviewCloseButtonOverlayProtocol {
         /// Accessibility description of the action the symbol represents.
         var accessibilityDescription: String {
             switch self {
-            case .close: "Tap to Close Window; Hold 1 Second to Quit Application"
+            case .close: "Tap to Close Window; Hold 0.75 Seconds to Quit Application"
             case .minimize: "Minimize Window"
             case .quit: "Force Quit"
             case .fullscreen: "Toggle Fullscreen"

@@ -150,7 +150,7 @@ final class GeneralSettingsPane: MCSCSettingsPane {
         hoverCloseCheckbox = missionControl.addDescribedCheckbox(
             title: "Hover Window Controls",
             description: "Shows clickable close, minimize, and fullscreen buttons on window thumbnails. "
-                + "Tap × to close the window; hold for 1 second to quit the app. Releasing a hold early cancels. "
+                + "Tap × to close the window; hold for 0.75 seconds to quit the app. Releasing a hold early cancels. "
                 + "With ×: ⌘ force quits, ⌥ minimizes, and ⌃ toggles fullscreen.",
             target: self,
             action: #selector(toggleHoverClose(_:))
