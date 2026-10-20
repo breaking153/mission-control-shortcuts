@@ -2,6 +2,33 @@ import Foundation
 
 /// Value type representing user-configurable shortcut and gesture toggles.
 struct ShortcutConfiguration {
+    var isNativeWindowButtonHitExpansionEnabled = true {
+        didSet { UserDefaults.standard.set(
+            isNativeWindowButtonHitExpansionEnabled,
+            forKey: Self.Keys.nativeButtonHitEnabled
+        ) }
+    }
+
+    var nativeWindowButtonHitScale = 1.6 {
+        didSet {
+            nativeWindowButtonHitScale = nativeWindowButtonHitScale.isFinite ? min(
+                max(nativeWindowButtonHitScale, 1),
+                3
+            ) : 1.6
+            UserDefaults.standard.set(nativeWindowButtonHitScale, forKey: Self.Keys.nativeButtonHitScale)
+        }
+    }
+
+    var missionControlButtonScale = 1.25 {
+        didSet {
+            missionControlButtonScale = missionControlButtonScale.isFinite ? min(
+                max(missionControlButtonScale, 0.75),
+                2
+            ) : 1.25
+            UserDefaults.standard.set(missionControlButtonScale, forKey: Self.Keys.missionControlButtonScale)
+        }
+    }
+
     // MARK: - Rebindable shortcut bindings
 
     /// Action → key combination. An action is *active* exactly when it has a
@@ -215,6 +242,24 @@ struct ShortcutConfiguration {
         didSet { UserDefaults.standard.set(isKeyboardNavigationEnabled, forKey: Self.Keys.keyboardNavigation) }
     }
 
+    /// Shows titles and app icons for every Mission Control window thumbnail.
+    var isMissionControlLabelsEnabled = false {
+        didSet {
+            UserDefaults.standard.set(isMissionControlLabelsEnabled, forKey: Self.Keys.missionControlLabelsEnabled)
+        }
+    }
+
+    var missionControlLabelStyle = MissionControlLabelStyle() {
+        didSet {
+            missionControlLabelStyle = missionControlLabelStyle.validated
+            let defaults = UserDefaults.standard
+            defaults.set(missionControlLabelStyle.position.rawValue, forKey: Self.Keys.missionControlLabelPosition)
+            defaults.set(missionControlLabelStyle.iconPosition.rawValue, forKey: Self.Keys.missionControlIconPosition)
+            defaults.set(Double(missionControlLabelStyle.iconSize), forKey: Self.Keys.missionControlIconSize)
+            defaults.set(Double(missionControlLabelStyle.fontSize), forKey: Self.Keys.missionControlLabelFontSize)
+        }
+    }
+
     /// When true, close operations fall back to quitting the app if no open windows remain.
     var isQuitAppIfNoWindowsEnabled = false {
         didSet { UserDefaults.standard.set(isQuitAppIfNoWindowsEnabled, forKey: Self.Keys.quitAppIfNoWindowsEnabled) }
@@ -255,6 +300,13 @@ struct ShortcutConfiguration {
         loadStoredToggles()
         loadStoredBindings()
         loadStoredGestureMappings()
+        loadStoredMissionControlLabelStyle()
+        if let value = UserDefaults.standard.object(forKey: Self.Keys.nativeButtonHitScale) as? Double {
+            nativeWindowButtonHitScale = value
+        }
+        if let value = UserDefaults.standard.object(forKey: Self.Keys.missionControlButtonScale) as? Double {
+            missionControlButtonScale = value
+        }
         if let val = UserDefaults.standard.object(forKey: Self.Keys.twoFingerHoldDuration) as? Double {
             twoFingerHoldDuration = val
         }
@@ -276,6 +328,8 @@ struct ShortcutConfiguration {
         (\.isCmdSpaceEnabled, Keys.cmdSpaceEnabled, true),
 
         (\.isKeyboardNavigationEnabled, Keys.keyboardNavigation, true),
+        (\.isMissionControlLabelsEnabled, Keys.missionControlLabelsEnabled, false),
+        (\.isNativeWindowButtonHitExpansionEnabled, Keys.nativeButtonHitEnabled, true),
         (\.isSmartTabCloseEnabled, Keys.smartTabCloseEnabled, true),
         (\.isDockActionsOutsideMCEnabled, Keys.dockActionsOutsideMC, false),
         (\.isTitleBarActionsOutsideMCEnabled, Keys.titleBarActionsOutsideMC, false),
@@ -308,6 +362,26 @@ struct ShortcutConfiguration {
                 self[keyPath: entry.keyPath] = value
             }
         }
+    }
+
+    private mutating func loadStoredMissionControlLabelStyle() {
+        let defaults = UserDefaults.standard
+        var style = MissionControlLabelStyle()
+        if let value = defaults.string(forKey: Self.Keys.missionControlLabelPosition),
+           let position = MissionControlLabelPosition(rawValue: value) {
+            style.position = position
+        }
+        if let value = defaults.string(forKey: Self.Keys.missionControlIconPosition),
+           let position = MissionControlIconPosition(rawValue: value) {
+            style.iconPosition = position
+        }
+        if let size = defaults.object(forKey: Self.Keys.missionControlIconSize) as? Double {
+            style.iconSize = CGFloat(size)
+        }
+        if let size = defaults.object(forKey: Self.Keys.missionControlLabelFontSize) as? Double {
+            style.fontSize = CGFloat(size)
+        }
+        missionControlLabelStyle = style.validated
     }
 
     private mutating func loadStoredGestureMappings() {
@@ -402,6 +476,9 @@ struct ShortcutConfiguration {
             self[keyPath: entry.keyPath] = entry.defaultValue
         }
         twoFingerHoldDuration = 0.4
+        missionControlLabelStyle = MissionControlLabelStyle()
+        nativeWindowButtonHitScale = 1.6
+        missionControlButtonScale = 1.25
         shortcutBindings = RoutedAction.defaultBindings
         resetGestureMappings()
     }
@@ -560,6 +637,9 @@ private extension ShortcutConfiguration {
     }
 
     enum Keys {
+        static let nativeButtonHitEnabled = "mcsc.nativeWindowButtons.hitExpansion.enabled"
+        static let nativeButtonHitScale = "mcsc.nativeWindowButtons.hitScale"
+        static let missionControlButtonScale = "mcsc.missionControl.buttons.scale"
         static let shortcutBindings = "mcsc.shortcuts.bindings"
         /// Legacy shortcut keys
         static let closingEnabled = "mcsc.shortcuts.closing.enabled",
@@ -581,9 +661,15 @@ private extension ShortcutConfiguration {
                    movePreviousDesktopEnabled = "mcsc.shortcuts.movePreviousDesktop.enabled"
         /// Feature toggles
         static let keyboardNavigation = "mcsc.keyboardNavigation.enabled",
+                   missionControlLabelsEnabled = "mcsc.missionControl.labels.enabled",
                    smartTabCloseEnabled = "mcsc.shortcuts.smartTabCloseEnabled",
                    dockActionsOutsideMC = "mcsc.dockActionsOutsideMC.enabled",
                    titleBarActionsOutsideMC = "mcsc.titleBarActionsOutsideMC.enabled"
+        /// Mission Control label appearance
+        static let missionControlLabelPosition = "mcsc.missionControl.labels.position",
+                   missionControlIconPosition = "mcsc.missionControl.labels.iconPosition",
+                   missionControlIconSize = "mcsc.missionControl.labels.iconSize",
+                   missionControlLabelFontSize = "mcsc.missionControl.labels.fontSize"
         /// Gestures
         static let gesturesEnabled = "mcsc.gestures.enabled",
                    pinchInEnabled = "mcsc.gestures.pinchIn.enabled",

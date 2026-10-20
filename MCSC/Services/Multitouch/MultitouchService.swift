@@ -15,12 +15,12 @@ struct TouchPoint {
 }
 
 enum MultitouchFingerState {
-    static let starting: Int32 = 2
-    static let hovering: Int32 = 3
+    nonisolated static let starting: Int32 = 2
+    nonisolated static let hovering: Int32 = 3
     /// Contact firmly made with trackpad surface
-    static let touching: Int32 = 4
-    static let staying: Int32 = 5
-    static let lifting: Int32 = 7
+    nonisolated static let touching: Int32 = 4
+    nonisolated static let staying: Int32 = 5
+    nonisolated static let lifting: Int32 = 7
 }
 
 /// Thin wrapper around MultitouchSupport.framework.
@@ -42,6 +42,9 @@ final class MultitouchService {
 
     private var devices: [MTDeviceRef] = []
     private var isRunning = false
+    var isListening: Bool {
+        isRunning
+    }
 
     /// Set before calling start(). Uses weak-safe pattern via ViewModel.
     var onFrame: FrameCallback?
@@ -209,41 +212,40 @@ private nonisolated func multitouchCallback(
     timestamp: Double,
     frame _: Int32
 ) -> Int32 {
-    guard let fingers, count > 0 else { return 0 }
-
-    let fingerPtr = fingers.assumingMemoryBound(to: Finger.self)
-
-    // Fast pre-filter: check if any finger is active without allocating heap memory
-    var hasActiveFinger = false
-    for i in 0 ..< Int(count) {
-        if fingerPtr[i].state >= MultitouchFingerState.touching {
-            hasActiveFinger = true
-            break
-        }
-    }
-
-    // Throttle BEFORE the main-queue hop and before array allocation:
-    // only ~30 non-empty frames/s cross threads. Empty frames bypass the gate
-    // so recognizers observe finger-lift immediately (end-of-gesture state must
-    // not be delayed by up to 33 ms).
-    if hasActiveFinger, !multitouchFrameGate.shouldForward(timestamp: timestamp) {
-        return 0
-    }
-
+    guard count >= 0 else { return 0 }
     var points: [TouchPoint] = []
-    points.reserveCapacity(Int(count))
+    if count > 0 {
+        guard let fingers else { return 0 }
+        let fingerPtr = fingers.assumingMemoryBound(to: Finger.self)
 
-    for i in 0 ..< Int(count) {
-        let f = fingerPtr[i]
-        // Only include fingers that are actively touching/hovering
-        if f.state >= MultitouchFingerState.touching {
-            points.append(TouchPoint(
-                identifier: f.identifier,
-                state: f.state,
-                normalizedX: f.normalizedX,
-                normalizedY: f.normalizedY,
-                size: f.size
-            ))
+        // Lifting contacts no longer participate in gesture recognition.
+        var hasActiveFinger = false
+        for i in 0 ..< Int(count) {
+            let state = fingerPtr[i].state
+            if state >= MultitouchFingerState.touching, state < MultitouchFingerState.lifting {
+                hasActiveFinger = true
+                break
+            }
+        }
+
+        // Empty/end frames bypass the 30 Hz gate so a gesture cannot remain
+        // latched after the final contact lifts.
+        if hasActiveFinger, !multitouchFrameGate.shouldForward(timestamp: timestamp) {
+            return 0
+        }
+
+        points.reserveCapacity(Int(count))
+        for i in 0 ..< Int(count) {
+            let f = fingerPtr[i]
+            if f.state >= MultitouchFingerState.touching, f.state < MultitouchFingerState.lifting {
+                points.append(TouchPoint(
+                    identifier: f.identifier,
+                    state: f.state,
+                    normalizedX: f.normalizedX,
+                    normalizedY: f.normalizedY,
+                    size: f.size
+                ))
+            }
         }
     }
 

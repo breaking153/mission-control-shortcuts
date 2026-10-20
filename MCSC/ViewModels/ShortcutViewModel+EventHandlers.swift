@@ -19,10 +19,9 @@ extension ShortcutViewModel {
             }
 
             // If hoverService has not activated yet, check if Mission Control is active
-            if !self.hoverService.isMissionControlActive, self.config.isKeyboardNavigationEnabled {
-                if self.missionControlService.isMissionControlActive {
-                    self.hoverService.handleActivated()
-                }
+            if !self.hoverService.isMissionControlActive, self.config.isKeyboardNavigationEnabled,
+               self.missionControlService.isMissionControlActive {
+                self.hoverService.handleActivated()
             }
 
             // Cheap pre-filter BEFORE any AX IPC: plain typing (no Cmd) and
@@ -41,14 +40,11 @@ extension ShortcutViewModel {
             let isControlPressed = flags.contains(.maskControl)
             let isOptionPressed = flags.contains(.maskAlternate)
 
-            if isCmdPressed && !isShiftPressed && !isControlPressed && !isOptionPressed {
-                if keyCode == ShortcutActionRouter.kKeySpace, self.config.isCmdSpaceEnabled,
-                   !self.missionControlService.isSimulating {
-                    if self.missionControlService.checkMissionControlActive() {
-                        self.missionControlService.executeFixSequence()
-                        return true
-                    }
-                }
+            if isCmdPressed && !isShiftPressed && !isControlPressed && !isOptionPressed,
+               keyCode == ShortcutActionRouter.kKeySpace, self.config.isCmdSpaceEnabled,
+               !self.missionControlService.isSimulating, self.missionControlService.checkMissionControlActive() {
+                self.missionControlService.executeFixSequence()
+                return true
             }
 
             let effectiveLocation = (location == .zero) ? self.currentAXMouseLocation() : location

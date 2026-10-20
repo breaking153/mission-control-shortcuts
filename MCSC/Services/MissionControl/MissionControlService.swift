@@ -73,7 +73,7 @@ final class MissionControlService: MissionControlServiceProtocol {
     /// Layer of Mission Control's spaces bar window in WindowManager.
     private let windowManagerSpacesBarLayer = 14
 
-    // MARK: - Cached detection (coalesced; polled at most every 350ms)
+    // MARK: - Cached detection (150ms closed / 350ms active)
 
     /// Cache window for the detection scan. A `var` so tests can set it to 0
     /// to force cache misses and exercise the latch self-correction path.
@@ -84,6 +84,9 @@ final class MissionControlService: MissionControlServiceProtocol {
     /// sources (event tap + multitouch) miss the cache on the same runloop
     /// turn. Set while the WindowServer IPC is in flight.
     private var isDetecting = false
+    /// A rapid close/open can fall entirely between two cached scans. A new
+    /// canvas still identifies a new session even if no inactive sample exists.
+    private var activeOverviewWindowIDs: Set<CGWindowID> = []
 
     /// Test-only: force the cache window to expire so the next
     /// `checkMissionControlActive()` runs the scan instead of serving the
@@ -188,6 +191,7 @@ final class MissionControlService: MissionControlServiceProtocol {
         localObservers.removeAll()
 
         _isMissionControlActive = false
+        activeOverviewWindowIDs.removeAll(keepingCapacity: false)
         cachedIsActive = false
         lastDetectionTime = CACurrentMediaTime()
         isStarted = false
@@ -201,6 +205,9 @@ final class MissionControlService: MissionControlServiceProtocol {
     /// next read returns instantly without a re-scan.
     func markActive(_ active: Bool) {
         guard _isMissionControlActive != active else { return }
+        if !active {
+            activeOverviewWindowIDs.removeAll(keepingCapacity: false)
+        }
         _isMissionControlActive = active
         cachedIsActive = active
         lastDetectionTime = CACurrentMediaTime()
@@ -220,13 +227,17 @@ final class MissionControlService: MissionControlServiceProtocol {
         let now = CACurrentMediaTime()
 
         if !force {
+            // Reuse the existing 200 ms poll while closed, so opening does not
+            // wait through two ticks of the longer active-session cache.
+            let cacheInterval = _isMissionControlActive
+                ? detectionCacheInterval : min(0.15, detectionCacheInterval)
             // Latch fast-path: trust the notification/AXObserver signal while the
             // cache window is fresh.
-            if _isMissionControlActive, now - lastDetectionTime < detectionCacheInterval {
+            if _isMissionControlActive, now - lastDetectionTime < cacheInterval {
                 return true
             }
 
-            if now - lastDetectionTime < detectionCacheInterval, let cached = cachedIsActive {
+            if now - lastDetectionTime < cacheInterval, let cached = cachedIsActive {
                 return cached
             }
             // Coalesce concurrent callers (event tap + multitouch) on same turn.
@@ -241,6 +252,8 @@ final class MissionControlService: MissionControlServiceProtocol {
         // Collect Dock & WindowManager layers
         var emptyNamedDockLayers: [Int] = []
         var hasWindowManagerOverlay = false
+        var windowManagerWindowIDs = Set<CGWindowID>()
+        var dockOverviewWindowIDs = Set<CGWindowID>()
         let windowList = AppSignpost.trace(AppSignpost.missionControl, "windowListScan") {
             windowListProvider()
         }
@@ -251,8 +264,15 @@ final class MissionControlService: MissionControlServiceProtocol {
                 let name = window[kCGWindowName as String] as? String ?? ""
                 if owner == "Dock", name.isEmpty {
                     emptyNamedDockLayers.append(layer)
+                    if layer == missionControlOverlayLayer,
+                       let id = window[kCGWindowNumber as String] as? CGWindowID {
+                        dockOverviewWindowIDs.insert(id)
+                    }
                 } else if owner == "WindowManager", layer == windowManagerOverlayLayer {
                     hasWindowManagerOverlay = true
+                    if let id = window[kCGWindowNumber as String] as? CGWindowID {
+                        windowManagerWindowIDs.insert(id)
+                    }
                 }
             }
         }
@@ -260,14 +280,30 @@ final class MissionControlService: MissionControlServiceProtocol {
         let isDockMC = emptyNamedDockLayers.contains(missionControlOverlayLayer)
             && emptyNamedDockLayers.contains { $0 <= dockBarLayerThreshold }
         let isActive = hasWindowManagerOverlay || isDockMC
+        // A persistent Dock surface must not mask a new WindowManager canvas.
+        let overviewWindowIDs = hasWindowManagerOverlay ? windowManagerWindowIDs : dockOverviewWindowIDs
 
         let previousActive = _isMissionControlActive
+        let replacedSession = previousActive && isActive
+            && !activeOverviewWindowIDs.isEmpty && !overviewWindowIDs.isEmpty
+            && activeOverviewWindowIDs.isDisjoint(with: overviewWindowIDs)
+        activeOverviewWindowIDs = isActive ? overviewWindowIDs : []
         cachedIsActive = isActive
         lastDetectionTime = now
         _isMissionControlActive = isActive
 
         // Notify state transitions when detected via the window-list scan
-        if isActive != previousActive {
+        if replacedSession {
+            AppLogger.missionControl.info("Overview canvas replaced; restarting tracking session")
+            _isMissionControlActive = false
+            cachedIsActive = false
+            activeOverviewWindowIDs.removeAll(keepingCapacity: false)
+            onDeactivated?()
+            _isMissionControlActive = true
+            cachedIsActive = true
+            activeOverviewWindowIDs = overviewWindowIDs
+            onActivated?()
+        } else if isActive != previousActive {
             if isActive {
                 onActivated?()
             } else {
@@ -306,8 +342,12 @@ final class MissionControlService: MissionControlServiceProtocol {
     private func postKeyEvent(keyCode: CGKeyCode, flags: CGEventFlags) {
         let source = CGEventSource(stateID: .combinedSessionState)
 
-        guard let keyDown = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: true) else { return }
-        guard let keyUp = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: false) else { return }
+        guard let keyDown = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: true),
+              let keyUp = CGEvent(
+                  keyboardEventSource: source,
+                  virtualKey: keyCode,
+                  keyDown: false
+              ) else { return }
 
         keyDown.flags = flags
         keyUp.flags = flags

@@ -1,6 +1,30 @@
 import Foundation
 
 extension ShortcutViewModel {
+    var isNativeWindowButtonHitExpansionEnabled: Bool {
+        get { config.isNativeWindowButtonHitExpansionEnabled }
+        set {
+            config.isNativeWindowButtonHitExpansionEnabled = newValue
+            syncNativeWindowButtonHitService()
+        }
+    }
+
+    var nativeWindowButtonHitScale: Double {
+        get { config.nativeWindowButtonHitScale }
+        set {
+            config.nativeWindowButtonHitScale = newValue
+            syncNativeWindowButtonHitService()
+        }
+    }
+
+    var missionControlButtonScale: Double {
+        get { config.missionControlButtonScale }
+        set {
+            config.missionControlButtonScale = newValue
+            hoverService.windowButtonScale = CGFloat(config.missionControlButtonScale)
+        }
+    }
+
     /// Forwarding properties for configuration (keeps AppDelegate and Settings API unchanged)
     var isClosingEnabled: Bool {
         get { config.isClosingEnabled } set { config.isClosingEnabled = newValue }
@@ -192,6 +216,23 @@ extension ShortcutViewModel {
 
     var isKeyboardNavigationEnabled: Bool {
         get { config.isKeyboardNavigationEnabled } set { config.isKeyboardNavigationEnabled = newValue }
+    }
+
+    var isMissionControlLabelsEnabled: Bool {
+        get { config.isMissionControlLabelsEnabled }
+        set {
+            config.isMissionControlLabelsEnabled = newValue
+            hoverService.areWindowLabelsEnabled = newValue
+            syncServiceLifecycles()
+        }
+    }
+
+    var missionControlLabelStyle: MissionControlLabelStyle {
+        get { config.missionControlLabelStyle }
+        set {
+            config.missionControlLabelStyle = newValue
+            hoverService.windowLabelStyle = config.missionControlLabelStyle
+        }
     }
 
     var isHapticFeedbackEnabled: Bool {

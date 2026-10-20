@@ -31,6 +31,12 @@ protocol AccessibilityServiceProtocol {
         matchingWindowIDs: Set<CGWindowID>?
     ) -> (tileElement: AXUIElement, windowID: CGWindowID)?
 
+    /// Snapshots real preview geometry without moving the cursor or retaining AX tiles.
+    func getMissionControlPreviews(matchingWindowIDs: Set<CGWindowID>) -> [MissionControlPreview]
+
+    /// Resolves titles in one AX window enumeration per owning application.
+    func windowTitles(for processID: pid_t) -> [CGWindowID: String]
+
     /// Resolves the frame of a native close button in a Mission Control preview tile, if present.
     func getPreviewCloseButtonFrame(for tileElement: AXUIElement) -> CGRect?
 
@@ -40,6 +46,7 @@ protocol AccessibilityServiceProtocol {
     /// Performs a named AX action (e.g. `kAXPressAction`) on `element`.
     /// Returns `true` if the action was accepted by the target app.
     func performAction(_ action: String, on element: AXUIElement) -> Bool
+    func setFullScreen(_ fullScreen: Bool, for window: AXUIElement) -> Bool
 
     /// Reads a typed AX attribute value (e.g. `kAXCloseButtonAttribute`).
     /// Returns `nil` when the attribute is missing or of a different type.
@@ -107,6 +114,10 @@ protocol AccessibilityServiceProtocol {
 }
 
 extension AccessibilityServiceProtocol {
+    func setFullScreen(_: Bool, for _: AXUIElement) -> Bool {
+        false
+    }
+
     func getMissionControlPreviewTile(at point: CGPoint) -> (tileElement: AXUIElement, windowID: CGWindowID)? {
         getMissionControlPreviewTile(at: point, matchingWindowIDs: nil)
     }
@@ -268,7 +279,7 @@ final class AccessibilityService: AccessibilityServiceProtocol {
                 var dockChild: AXUIElement?
                 if AXUIElementCopyElementAtPosition(dockElement, Float(point.x), Float(point.y), &dockChild) ==
                     .success,
-                    let dockChild {
+                   let dockChild {
                     return dockChild
                 }
             }
@@ -295,10 +306,9 @@ final class AccessibilityService: AccessibilityServiceProtocol {
 
         // macOS 27+ / Modern Mission Control:
         // WindowManager exposes Mission Control window preview buttons with a "wid" attribute.
-        if let preview = getMissionControlPreviewTile(for: element) {
-            if let resolved = getWindow(forWindowID: preview.windowID) {
-                return resolved
-            }
+        if let preview = getMissionControlPreviewTile(for: element),
+           let resolved = getWindow(forWindowID: preview.windowID) {
+            return resolved
         }
 
         return nil
@@ -309,6 +319,12 @@ final class AccessibilityService: AccessibilityServiceProtocol {
 
     /// Resolves a Mission Control preview tile element and its window ID if `element` (or an ancestor) represents one.
     func getMissionControlPreviewTile(for element: AXUIElement) -> (tileElement: AXUIElement, windowID: CGWindowID)? {
+        // Our transparent panels are never native tiles. Querying their AX
+        // attributes from the event-tap main thread can wait on this same thread.
+        var ownerPID: pid_t = 0
+        if AXUIElementGetPid(element, &ownerPID) == .success, ownerPID == getpid() {
+            return nil
+        }
         var current: AXUIElement? = element
         var depth = 0
         while let el = current, depth < 10 {
@@ -335,32 +351,45 @@ final class AccessibilityService: AccessibilityServiceProtocol {
         if let matchingWindowIDs, matchingWindowIDs.isEmpty {
             return nil
         }
+        let activeSpaceID = matchingWindowIDs == nil ? nil : missionControlSpace(at: point)
+        if matchingWindowIDs != nil, activeSpaceID == nil {
+            return nil
+        }
         // 1. Direct hit-test WindowManager first (it owns Mission Control layer 19 on macOS 27)
         if let wmElement = getWindowManagerAXElement() {
             var wmChild: AXUIElement?
             if AXUIElementCopyElementAtPosition(wmElement, Float(point.x), Float(point.y), &wmChild) == .success,
                let wmChild,
-               let preview = getMissionControlPreviewTile(for: wmChild) {
-                if let matchingWindowIDs {
-                    if matchingWindowIDs.contains(preview.windowID) {
-                        return preview
-                    }
-                } else {
-                    return preview
-                }
+               let preview = getMissionControlPreviewTile(for: wmChild), matchesMissionControlPreview(
+                   preview,
+                   at: point,
+                   matchingWindowIDs: matchingWindowIDs,
+                   spaceID: activeSpaceID
+               ) {
+                return preview
             }
+        }
+
+        // A hidden replica can win the native hit test. Resolve the current
+        // tile before system-wide lookup can encounter our transparent panels.
+        if let matchingWindowIDs, let spaceID = activeSpaceID,
+           let preview = MissionControlPreviewSnapshot.find(
+               at: point, spaceID: spaceID,
+               roots: [getWindowManagerAXElement(), getDockAXElement()].compactMap { $0 },
+               matchingWindowIDs: matchingWindowIDs, accessibility: self
+           ) {
+            return preview
         }
 
         // 2. Fall back to systemWide element hit-test
         if let hitElement = getElement(at: point),
-           let preview = getMissionControlPreviewTile(for: hitElement) {
-            if let matchingWindowIDs {
-                if matchingWindowIDs.contains(preview.windowID) {
-                    return preview
-                }
-            } else {
-                return preview
-            }
+           let preview = getMissionControlPreviewTile(for: hitElement), matchesMissionControlPreview(
+               preview,
+               at: point,
+               matchingWindowIDs: matchingWindowIDs,
+               spaceID: activeSpaceID
+           ) {
+            return preview
         }
 
         // 3. Fall back to Dock element hit-test (classic Dock Exposé)
@@ -368,18 +397,25 @@ final class AccessibilityService: AccessibilityServiceProtocol {
             var dockChild: AXUIElement?
             if AXUIElementCopyElementAtPosition(dockElement, Float(point.x), Float(point.y), &dockChild) == .success,
                let dockChild,
-               let preview = getMissionControlPreviewTile(for: dockChild) {
-                if let matchingWindowIDs {
-                    if matchingWindowIDs.contains(preview.windowID) {
-                        return preview
-                    }
-                } else {
-                    return preview
-                }
+               let preview = getMissionControlPreviewTile(for: dockChild), matchesMissionControlPreview(
+                   preview,
+                   at: point,
+                   matchingWindowIDs: matchingWindowIDs,
+                   spaceID: activeSpaceID
+               ) {
+                return preview
             }
         }
 
         return nil
+    }
+
+    func getMissionControlPreviews(matchingWindowIDs: Set<CGWindowID>) -> [MissionControlPreview] {
+        guard !matchingWindowIDs.isEmpty else { return [] }
+        let roots = [getWindowManagerAXElement(), getDockAXElement()].compactMap { $0 }
+        return MissionControlPreviewSnapshot.collect(
+            roots: roots, matchingWindowIDs: matchingWindowIDs, accessibility: self
+        )
     }
 
     /// Resolves the native close button AXUIElement in a Mission Control preview tile, if present.
@@ -420,9 +456,9 @@ final class AccessibilityService: AccessibilityServiceProtocol {
     /// Resolves an application's `AXUIElement` window matching `windowID` via CoreGraphics and Accessibility.
     func getWindow(forWindowID windowID: CGWindowID) -> AXUIElement? {
         guard let info = (CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]])?.first(where: {
-            ($0[kCGWindowNumber as String] as? CGWindowID) == windowID
-        }),
-            let pid = info[kCGWindowOwnerPID as String] as? pid_t else {
+                  ($0[kCGWindowNumber as String] as? CGWindowID) == windowID
+              }),
+              let pid = info[kCGWindowOwnerPID as String] as? pid_t else {
             return nil
         }
         let app = appElement(for: pid)
@@ -441,18 +477,15 @@ final class AccessibilityService: AccessibilityServiceProtocol {
         // Fallback: match by title or frame when _AXUIElementGetWindow fails (e.g. Finder / custom AX)
         let winName = info[kCGWindowName as String] as? String
         for axWindow in axWindows {
-            if let winName, !winName.isEmpty {
-                if let title: String = getAttributeValue(kAXTitleAttribute, for: axWindow), title == winName {
-                    return axWindow
-                }
+            if let winName, !winName.isEmpty, let title: String = getAttributeValue(kAXTitleAttribute, for: axWindow),
+               title == winName {
+                return axWindow
             }
             if let bounds = info[kCGWindowBounds as String] as? [String: CGFloat],
                let x = bounds["X"], let y = bounds["Y"], let w = bounds["Width"], let h = bounds["Height"],
-               let frame = getFrame(for: axWindow) {
-                if abs(frame.minX - x) < 2, abs(frame.minY - y) < 2,
-                   abs(frame.width - w) < 2, abs(frame.height - h) < 2 {
-                    return axWindow
-                }
+               let frame = getFrame(for: axWindow), abs(frame.minX - x) < 2, abs(frame.minY - y) < 2,
+               abs(frame.width - w) < 2, abs(frame.height - h) < 2 {
+                return axWindow
             }
         }
         return nil
@@ -466,6 +499,15 @@ final class AccessibilityService: AccessibilityServiceProtocol {
             )
         }
         return result == .success
+    }
+
+    func setFullScreen(_ fullScreen: Bool, for window: AXUIElement) -> Bool {
+        AXUIElementSetAttributeValue(
+            window,
+            "AXFullScreen" as CFString,
+            fullScreen ? kCFBooleanTrue : kCFBooleanFalse
+        ) ==
+            .success
     }
 
     func getAttributeValue<T>(_ attribute: String, for element: AXUIElement) -> T? {
@@ -605,16 +647,16 @@ final class AccessibilityService: AccessibilityServiceProtocol {
     /// `maxTabSearchDepth`; `AXWebArea` nodes are pruned so the search never
     /// walks an entire rendered page.
     private func findTabCloseButton(in element: AXUIElement, depth: Int) -> AXUIElement? {
-        guard depth < Self.maxTabSearchDepth else { return nil }
-        guard let children: [AXUIElement] = getAttributeValue(kAXChildrenAttribute, for: element) else { return nil }
+        guard depth < Self.maxTabSearchDepth, let children: [AXUIElement] = getAttributeValue(
+            kAXChildrenAttribute,
+            for: element
+        ) else { return nil }
 
         // Pass 1: is there a tab group at this level?
         for child in children {
             guard let role: String = getAttributeValue(kAXRoleAttribute, for: child) else { continue }
-            if role == "AXTabGroup" {
-                if let btn = closeButtonForSelectedTab(in: child) {
-                    return btn
-                }
+            if role == "AXTabGroup", let btn = closeButtonForSelectedTab(in: child) {
+                return btn
             }
         }
 
@@ -639,13 +681,11 @@ final class AccessibilityService: AccessibilityServiceProtocol {
             guard let tabRole: String = getAttributeValue(kAXRoleAttribute, for: tab),
                   tabRole == "AXRadioButton" else { continue }
             let isSelected: Bool? = getAttributeValue(kAXValueAttribute, for: tab)
-            if isSelected == true {
-                if let tabChildren: [AXUIElement] = getAttributeValue(kAXChildrenAttribute, for: tab) {
-                    for tabChild in tabChildren {
-                        if let childRole: String = getAttributeValue(kAXRoleAttribute, for: tabChild),
-                           childRole == "AXButton" {
-                            return tabChild
-                        }
+            if isSelected == true, let tabChildren: [AXUIElement] = getAttributeValue(kAXChildrenAttribute, for: tab) {
+                for tabChild in tabChildren {
+                    if let childRole: String = getAttributeValue(kAXRoleAttribute, for: tabChild),
+                       childRole == "AXButton" {
+                        return tabChild
                     }
                 }
             }

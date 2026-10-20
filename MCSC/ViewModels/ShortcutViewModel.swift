@@ -19,6 +19,7 @@ final class ShortcutViewModel {
     let eventTapService: EventTapServiceProtocol
     let accessibilityService: AccessibilityServiceProtocol
     let missionControlService: MissionControlServiceProtocol
+    var nativeWindowButtonHitService: NativeWindowButtonHitService?
     private let launchAtLoginService: LaunchAtLoginService
 
     lazy var multitouchService = MultitouchService()
@@ -33,22 +34,28 @@ final class ShortcutViewModel {
 
     lazy var spaceService: SpaceManagementServiceProtocol = SpaceManagementService()
 
-    lazy var hoverService: MissionControlHoverServiceProtocol = MissionControlHoverService(
-        accessibilityService: accessibilityService,
-        isMissionControlActiveProvider: { [weak self] in
-            self?.missionControlService.isMissionControlActive ?? false
-        },
-        missionControlService: missionControlService,
-        spaceService: spaceService,
-        animationStrategy: animationStrategy,
-        volumeService: volumeService,
-        isAutoEjectEnabledProvider: { [weak self] in
-            self?.config.isAutoEjectEnabled ?? false
-        },
-        isKeyboardNavigationEnabledProvider: { [weak self] in
-            self?.config.isKeyboardNavigationEnabled ?? true
-        }
-    )
+    lazy var hoverService: MissionControlHoverServiceProtocol = {
+        let service = MissionControlHoverService(
+            accessibilityService: accessibilityService,
+            isMissionControlActiveProvider: { [weak self] in
+                self?.missionControlService.isMissionControlActive ?? false
+            },
+            missionControlService: missionControlService,
+            spaceService: spaceService,
+            animationStrategy: animationStrategy,
+            volumeService: volumeService,
+            isAutoEjectEnabledProvider: { [weak self] in
+                self?.config.isAutoEjectEnabled ?? false
+            },
+            isKeyboardNavigationEnabledProvider: { [weak self] in
+                self?.config.isKeyboardNavigationEnabled ?? true
+            }
+        )
+        service.areWindowLabelsEnabled = config.isMissionControlLabelsEnabled
+        service.windowLabelStyle = config.missionControlLabelStyle
+        service.windowButtonScale = CGFloat(config.missionControlButtonScale)
+        return service
+    }()
 
     lazy var cursorFeedback: CursorFeedbackOverlay = .init(strategy: animationStrategy)
 
@@ -114,9 +121,13 @@ final class ShortcutViewModel {
     }
 
     /// Prevents gestures from firing right after Mission Control opens via 3-finger swipe.
-    private var isCoolingDown = false
+    private var gestureCooldownUntil: CFTimeInterval = 0
+    private var isCoolingDown: Bool {
+        CACurrentMediaTime() < gestureCooldownUntil
+    }
+
     /// Tracks 3+ finger contact so touch lift can immediately sync Mission Control activation state.
-    private var hadThreeOrMoreTouches = false
+    var hadThreeOrMoreTouches = false
     /// Throttles `MultitouchService` 60-120 Hz frames to at most 30 Hz so
     /// `isMissionControlActive` / `isDockHovered()` (both WindowServer/AX IPC)
     /// do not run per-frame. Keeps gesture latency <33ms.
@@ -143,14 +154,19 @@ final class ShortcutViewModel {
 
         // Cooldown after Mission Control activates to avoid false gesture detection, and notify hoverService.
         missionControlService.onActivated = { [weak self] in
-            self?.isCoolingDown = true
-            self?.hoverService.handleActivated()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-                self?.isCoolingDown = false
+            guard let self else { return }
+            self.nativeWindowButtonHitService?.cancelPendingPress()
+            self.gestureCooldownUntil = CACurrentMediaTime() + 0.5
+            if self.hadThreeOrMoreTouches {
+                self.hoverService.setOverviewGestureInProgress(true)
             }
+            self.hoverService.handleActivated()
+            self.syncMultitouchLifecycle()
         }
         missionControlService.onDeactivated = { [weak self] in
-            self?.hoverService.handleDeactivated()
+            guard let self else { return }
+            self.hoverService.handleDeactivated()
+            self.syncMultitouchLifecycle()
         }
     }
 
@@ -159,6 +175,9 @@ final class ShortcutViewModel {
     }
 
     private func setupCallbacks() {
+        eventTapService.onMouseEvent = { [weak self] type, event in
+            self?.nativeWindowButtonHitService?.handleEvent(type: type, event: event) ?? false
+        }
         setupShortcutHandler()
         registerGestureRecognizers()
         setupMultitouchFrameHandler()
@@ -254,43 +273,43 @@ final class ShortcutViewModel {
     /// - Target validation happens once upon gesture completion or hold threshold.
     private func setupMultitouchFrameHandler() {
         multitouchService.onFrame = { [weak self] touches, timestamp in
-            guard let self,
-                  self.config.isGesturesEnabled,
-                  !self.isCoolingDown else { return }
+            guard let self else { return }
 
-            // Track 3+ finger contact (MC swipe up/down or space switch).
-            // Instantly hide Mission Control close/search overlays so they don't linger during transitions.
+            // System overview gestures must hide labels even while custom
+            // gestures are disabled or opening Mission Control is cooling down.
             if touches.count >= 3 {
                 if !self.hadThreeOrMoreTouches {
                     self.hadThreeOrMoreTouches = true
                     if self.hoverService.isMissionControlActive {
-                        self.hoverService.beginSpaceTransition(duration: 0.35)
+                        self.hoverService.setOverviewGestureInProgress(true)
                     }
+                }
+            } else if self.hadThreeOrMoreTouches {
+                self.hadThreeOrMoreTouches = false
+                self.hoverService.setOverviewGestureInProgress(false)
+                _ = self.missionControlService.checkMissionControlActive(force: true)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+                    _ = self?.missionControlService.checkMissionControlActive(force: true)
                 }
             }
 
-            // Handle touch lift immediately without throttling or AX overhead
+            // A lift must clear the previous touch cycle even if opening
+            // Mission Control has temporarily paused gesture recognition.
             if touches.isEmpty {
-                self.holdDetector.handleTouchesEnded(timestamp: timestamp)
-                self.gestureEngine.processFrame([], timestamp: timestamp)
+                if !self.config.isGesturesEnabled || self.isCoolingDown {
+                    self.holdDetector.reset()
+                    self.gestureEngine.reset()
+                } else {
+                    self.holdDetector.handleTouchesEnded(timestamp: timestamp)
+                    self.gestureEngine.processFrame([], timestamp: timestamp)
+                }
                 if !(self.twoFingerTapRecognizer?.isGestureInProgress ?? false) {
                     self.dockSuppressor.isSuppressing = false
                 }
-                if self.hadThreeOrMoreTouches {
-                    self.hadThreeOrMoreTouches = false
-                    if self.hoverService.isMissionControlActive {
-                        self.hoverService.beginSpaceTransition()
-                    }
-                    // Multitouch gesture ended. If the user swiped up, Mission Control has opened;
-                    // if swiped down, Mission Control has closed.
-                    // Scan immediately and again after transition settles (~150ms).
-                    _ = self.missionControlService.checkMissionControlActive(force: true)
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
-                        _ = self?.missionControlService.checkMissionControlActive(force: true)
-                    }
-                }
                 return
             }
+
+            guard self.config.isGesturesEnabled, !self.isCoolingDown else { return }
 
             // Early exit for 1 finger (normal cursor motion/scroll):
             // notify holdDetector so it aborts any pending/held state, then exit with zero AX IPC.
@@ -346,6 +365,8 @@ final class ShortcutViewModel {
     // in `ShortcutViewModel+TargetResolution.swift` / `+Lifecycle.swift`.
 
     func start() {
+        syncNativeWindowButtonHitService()
+        let wasListening = multitouchService.isListening
         eventTapService.start()
         missionControlService.start()
 
@@ -355,18 +376,21 @@ final class ShortcutViewModel {
         // NSPanel, and installing the dock suppressor tap when none of
         // their toggles are on. Each service is started/stopped on
         // toggle change via syncServiceLifecycles().
-        if needsMultitouch {
-            multitouchService.start()
+        if needsMissionControlTracking {
+            hoverService.start()
         }
+        // Wake may arrive without willSleep: rebuild previously active device
+        // handles, while ordinary overview transitions keep their listener.
+        syncMultitouchLifecycle(forceRestart: wasListening)
         if needsDockSuppressor {
             dockSuppressor.start()
-        }
-        if isHoverCloseButtonEnabled {
-            hoverService.start()
         }
     }
 
     func stop() {
+        nativeWindowButtonHitService?.stop()
+        gestureCooldownUntil = 0
+        hadThreeOrMoreTouches = false
         eventTapService.stop()
         missionControlService.stop()
         multitouchService.stop()

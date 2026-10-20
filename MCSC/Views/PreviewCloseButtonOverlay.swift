@@ -5,13 +5,35 @@ import Symbols
 @MainActor
 protocol PreviewCloseButtonOverlayProtocol: FloatingOverlayProtocol {
     var currentAXRect: CGRect { get }
+    var buttonScale: CGFloat { get set }
+    func action(at point: CGPoint) -> PreviewCloseButtonOverlay.Mode?
+    func buttonFrame(at point: CGPoint) -> CGRect?
+    func setHovered(at point: CGPoint?)
     func show(for previewFrame: CGRect, closeButtonFrame: CGRect?, mode: PreviewCloseButtonOverlay.Mode)
     func show(at windowBounds: CGRect, mode: PreviewCloseButtonOverlay.Mode)
     func setMode(_ mode: PreviewCloseButtonOverlay.Mode)
     func setHovered(_ isHovered: Bool)
+    func setLongPressing(_ isPressed: Bool)
 }
 
 extension PreviewCloseButtonOverlayProtocol {
+    var buttonScale: CGFloat {
+        get { 1.25 } set {}
+    }
+
+    func action(at point: CGPoint) -> PreviewCloseButtonOverlay.Mode? {
+        currentAXRect.contains(point) ? .close : nil
+    }
+
+    func buttonFrame(at point: CGPoint) -> CGRect? {
+        currentAXRect.contains(point) ? currentAXRect : nil
+    }
+
+    func setHovered(at point: CGPoint?) {
+        setHovered(point != nil)
+    }
+
+    func setLongPressing(_: Bool) {}
     func show(for previewFrame: CGRect, mode: PreviewCloseButtonOverlay.Mode = .close) {
         show(for: previewFrame, closeButtonFrame: nil, mode: mode)
     }
@@ -53,7 +75,7 @@ final class PreviewCloseButtonOverlay: PreviewCloseButtonOverlayProtocol {
         /// Accessibility description of the action the symbol represents.
         var accessibilityDescription: String {
             switch self {
-            case .close: "Close Window"
+            case .close: "Tap to Close Window; Hold 1 Second to Quit Application"
             case .minimize: "Minimize Window"
             case .quit: "Force Quit"
             case .fullscreen: "Toggle Fullscreen"
@@ -78,8 +100,27 @@ final class PreviewCloseButtonOverlay: PreviewCloseButtonOverlayProtocol {
 
     private var panel: NSPanel?
     private var buttonView: CloseButtonView?
+    private var actionViews: [CloseButtonView] = []
+    var buttonScale: CGFloat = 1.25 {
+        didSet {
+            buttonScale = MissionControlWindowButtonLayout(scale: buttonScale).scale
+            guard buttonScale != oldValue else { return }
+            hide()
+            panel?.close()
+            panel = nil
+            buttonView = nil
+            actionViews.removeAll()
+        }
+    }
 
-    private(set) var isVisible = false
+    private var layout: MissionControlWindowButtonLayout {
+        .init(scale: buttonScale)
+    }
+
+    var isVisible: Bool {
+        panel?.isVisible ?? false
+    }
+
     private var currentAnchorOrigin: CGPoint = .zero
 
     /// The injected animation backend (zero-overhead CoreAnimation or native
@@ -95,16 +136,26 @@ final class PreviewCloseButtonOverlay: PreviewCloseButtonOverlayProtocol {
     }
 
     private func setupPanel() {
-        let contentRect = NSRect(x: 0, y: 0, width: Self.buttonDimension, height: Self.buttonDimension)
         let panel = OverlayPanelFactory.createPanel(
-            contentRect: contentRect,
-            ignoresMouseEvents: false
+            contentRect: NSRect(origin: .zero, size: layout.size), ignoresMouseEvents: false
         )
-
-        let button = CloseButtonView(frame: contentRect, strategy: strategy)
-
-        panel.contentView = button
-        self.buttonView = button
+        panel.animationBehavior = .none
+        let content = NSView(frame: NSRect(origin: .zero, size: layout.size))
+        for button in MissionControlWindowButton.allCases {
+            let view = CloseButtonView(frame: layout.visualFrame(for: button), strategy: strategy)
+            switch button {
+            case .close: buttonView = view
+            case .minimize: view.setMode(.minimize)
+            case .fullscreen: view.setMode(.fullscreen)
+            }
+            view.setAccessibilityElement(true)
+            view.setAccessibilityRole(.button)
+            view.setAccessibilityIdentifier("mcsc.previewButton.\(button)")
+            view.setAccessibilityLabel(view.currentMode.accessibilityDescription)
+            content.addSubview(view)
+            actionViews.append(view)
+        }
+        panel.contentView = content
         self.panel = panel
     }
 
@@ -130,50 +181,14 @@ final class PreviewCloseButtonOverlay: PreviewCloseButtonOverlayProtocol {
         guard let panel else { return }
 
         let primaryHeight = ScreenGeometry.primaryScreenHeight
-        let halfDim = Self.buttonDimension / 2.0
-
-        let axX: CGFloat
-        let axY: CGFloat
-        if let closeButtonFrame, !closeButtonFrame.isEmpty {
-            axX = closeButtonFrame.midX - halfDim
-            axY = closeButtonFrame.midY - halfDim
-        } else {
-            axX = previewFrame.minX - halfDim
-            axY = previewFrame.minY - halfDim
-        }
-
-        let buttonAXRect = CGRect(
-            x: axX,
-            y: axY,
-            width: Self.buttonDimension,
-            height: Self.buttonDimension
-        )
-
-        var cocoaX = buttonAXRect.origin.x
-        var cocoaY = primaryHeight - buttonAXRect.origin.y - Self.buttonDimension
-
-        let targetScreen = NSScreen.screens.first(where: {
-            ScreenGeometry.axBounds(for: $0, primaryHeight: primaryHeight).contains(previewFrame.origin)
-        }) ?? ScreenGeometry.screenContaining(axPoint: previewFrame.origin) ?? NSScreen.main ?? NSScreen.screens.first
-
-        if let screenFrame = targetScreen?.frame {
-            cocoaX = min(max(cocoaX, screenFrame.minX + 2), screenFrame.maxX - Self.buttonDimension - 2)
-            cocoaY = min(max(cocoaY, screenFrame.minY + 2), screenFrame.maxY - Self.buttonDimension - 2)
-        }
-
+        let anchor = closeButtonFrame.flatMap { $0.isEmpty ? nil : CGPoint(x: $0.midX, y: $0.midY) }
+            ?? CGPoint(x: previewFrame.minX, y: previewFrame.minY)
+        guard let screen = ScreenGeometry.screenContaining(axPoint: anchor) else { return }
+        let frame = layout.panelFrame(anchor: anchor, screen: ScreenGeometry.axBounds(for: screen))
         let targetRect = NSRect(
-            x: cocoaX,
-            y: cocoaY,
-            width: Self.buttonDimension,
-            height: Self.buttonDimension
+            x: frame.minX, y: primaryHeight - frame.maxY, width: frame.width, height: frame.height
         )
-
-        currentAXRect = CGRect(
-            x: cocoaX,
-            y: primaryHeight - cocoaY - Self.buttonDimension,
-            width: Self.buttonDimension,
-            height: Self.buttonDimension
-        )
+        currentAXRect = frame
 
         let isNewOrigin = !targetRect.origin.equalTo(currentAnchorOrigin)
         currentAnchorOrigin = targetRect.origin
@@ -181,14 +196,43 @@ final class PreviewCloseButtonOverlay: PreviewCloseButtonOverlayProtocol {
         panel.setFrame(targetRect, display: true)
         buttonView?.setMode(mode, animated: false)
 
+        let wasVisible = isVisible
         panel.orderFrontRegardless()
-        if !isVisible {
-            isVisible = true
-            if let buttonView {
-                strategy.applyAppear(on: buttonView, imageView: buttonView.imageView)
+        if !wasVisible {
+            for view in actionViews {
+                strategy.applyAppear(on: view, imageView: view.imageView)
             }
-        } else if isNewOrigin, let buttonView {
-            strategy.applyRelocationAppearance(on: buttonView, imageView: buttonView.imageView)
+        } else if isNewOrigin {
+            for view in actionViews {
+                strategy.applyRelocationAppearance(on: view, imageView: view.imageView)
+            }
+        }
+    }
+
+    func buttonFrame(at point: CGPoint) -> CGRect? {
+        guard isVisible,
+              let button = layout.button(at: CGPoint(x: point.x - currentAXRect.minX, y: point.y - currentAXRect.minY))
+        else { return nil }
+        return layout.hitFrame(for: button).offsetBy(dx: currentAXRect.minX, dy: currentAXRect.minY)
+    }
+
+    func action(at point: CGPoint) -> Mode? {
+        guard isVisible,
+              let button = layout.button(at: CGPoint(x: point.x - currentAXRect.minX, y: point.y - currentAXRect.minY))
+        else { return nil }
+        switch button {
+        case .close: return buttonView?.currentMode ?? .close
+        case .minimize: return .minimize
+        case .fullscreen: return .fullscreen
+        }
+    }
+
+    func setHovered(at point: CGPoint?) {
+        let hovered = point.flatMap {
+            layout.button(at: CGPoint(x: $0.x - currentAXRect.minX, y: $0.y - currentAXRect.minY))
+        }
+        for button in MissionControlWindowButton.allCases where actionViews.indices.contains(button.rawValue) {
+            actionViews[button.rawValue].setHovered(button == hovered)
         }
     }
 
@@ -199,20 +243,30 @@ final class PreviewCloseButtonOverlay: PreviewCloseButtonOverlayProtocol {
 
     func setMode(_ mode: Mode) {
         buttonView?.setMode(mode, animated: true)
+        buttonView?.setAccessibilityLabel(mode.accessibilityDescription)
     }
 
     /// Reflects mouse-over state on the anchor button with a scale animation.
     /// Driven by the service's input event tap (AppKit tracking areas don't
     /// fire while this app is inactive behind Mission Control).
     func setHovered(_ isHovered: Bool) {
-        buttonView?.setHovered(isHovered)
+        if isHovered {
+            buttonView?.setHovered(true)
+        } else {
+            for view in actionViews {
+                view.setHovered(false)
+            }
+        }
+    }
+
+    func setLongPressing(_ isPressed: Bool) {
+        buttonView?.setLongPressing(isPressed)
     }
 
     /// Hides the overlay panel.
     func hide() {
-        guard isVisible else { return }
+        buttonView?.resetPressFeedback()
         panel?.orderOut(nil)
-        isVisible = false
         currentAnchorOrigin = .zero
         currentAXRect = .zero
     }
@@ -228,6 +282,7 @@ final class CloseButtonView: NSView {
     private(set) var isHovered = false
     private(set) var currentMode: PreviewCloseButtonOverlay.Mode = .close
     private let strategy: OverlayAnimationStrategy
+    private var pressFeedback: CloseButtonPressFeedback?
 
     init(frame frameRect: NSRect, strategy: OverlayAnimationStrategy) {
         self.strategy = strategy
@@ -316,8 +371,8 @@ final class CloseButtonView: NSView {
         NSLayoutConstraint.activate([
             imageView.centerXAnchor.constraint(equalTo: centerXAnchor),
             imageView.centerYAnchor.constraint(equalTo: centerYAnchor),
-            imageView.widthAnchor.constraint(equalToConstant: 28),
-            imageView.heightAnchor.constraint(equalToConstant: 28)
+            imageView.widthAnchor.constraint(equalToConstant: bounds.width * 0.875),
+            imageView.heightAnchor.constraint(equalToConstant: bounds.height * 0.875)
         ])
 
         colorChangeObserver = NotificationCenter.default.addObserver(
@@ -345,6 +400,7 @@ final class CloseButtonView: NSView {
 
     /// Cleans up symbol effects and image cache.
     func reset() {
+        resetPressFeedback()
         imageView.removeAllSymbolEffects(animated: false)
         imageView.layer?.removeAllAnimations()
         layer?.removeAllAnimations()
@@ -352,6 +408,23 @@ final class CloseButtonView: NSView {
     }
 
     // MARK: - Hover State (driven by MissionControlHoverService event tap)
+
+    func setLongPressing(_ isPressed: Bool) {
+        if isPressed {
+            imageView.removeAllSymbolEffects(animated: false)
+            if pressFeedback == nil {
+                pressFeedback = CloseButtonPressFeedback(container: self, imageView: imageView)
+            }
+            pressFeedback?.start(duration: MissionControlCloseButtonPress.holdDuration,
+                                 delay: MissionControlCloseButtonPress.tapDuration)
+        } else {
+            pressFeedback?.release()
+        }
+    }
+
+    func resetPressFeedback() {
+        pressFeedback?.reset()
+    }
 
     /// Scales the button up while the cursor is over it and back to resting
     /// size when it leaves.

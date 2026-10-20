@@ -11,13 +11,12 @@ extension MissionControlHoverService {
 
     /// Resets the session and installs a fresh `MCKeyboardTapService` for the
     /// current Mission Control appearance. The HID tap is gated by the single
-    /// "Keyboard Navigation" toggle in `ShortcutConfiguration` and is not
-    /// created at all when the toggle is off, so keystrokes pass through.
+    /// "Keyboard Navigation" toggle or persistent labels. With navigation
+    /// off, it only observes exit/Space keys; keystrokes still pass through.
     func startKeyboardSession() {
         clearSearch()
 
-        guard isKeyboardNavigationEnabledProvider() else { return }
-        guard keyboardTap == nil else { return }
+        guard isKeyboardNavigationEnabledProvider() || areWindowLabelsEnabled, keyboardTap == nil else { return }
 
         debugLog("startKeyboardSession: installing MCKeyboardTapService", category: AppLogger.missionControl)
         let tap = MCKeyboardTapService()
@@ -54,14 +53,18 @@ extension MissionControlHoverService {
         // query).
         let isCtrlUp = (keyCode == 126 && flags.contains(.maskControl))
         let isF3OrMCKey = (keyCode == 99 || keyCode == 160)
-        let isEscapeEmptyQuery = (keyCode == 53 && searchSession.query.isEmpty)
+        let navigationEnabled = isKeyboardNavigationEnabledProvider()
+        let isEscapeEmptyQuery = keyCode == 53 && (searchSession.query.isEmpty || !navigationEnabled)
+        let isPlainEnter = (keyCode == 36 || keyCode == 76)
+            && flags.intersection([.maskCommand, .maskAlternate, .maskControl]).isEmpty
+        let isNativeEnter = !navigationEnabled && isPlainEnter
 
-        if isCtrlUp || isF3OrMCKey || isEscapeEmptyQuery {
+        if isCtrlUp || isF3OrMCKey || isEscapeEmptyQuery || isNativeEnter {
             debugLog(
                 "Exit key pressed (keyCode: \(keyCode)) - deactivating Mission Control",
                 category: AppLogger.missionControl
             )
-            handleDeactivated()
+            prepareForOverviewDismissal()
             return false // Pass through so WindowServer exits Mission Control
         }
 
@@ -98,7 +101,7 @@ extension MissionControlHoverService {
             return false
         }
 
-        guard isKeyboardNavigationEnabledProvider() else { return false }
+        guard navigationEnabled else { return false }
 
         if windows.isEmpty {
             fetchWindows()
@@ -118,6 +121,9 @@ extension MissionControlHoverService {
 
         switch effect {
         case .ignore:
+            if isPlainEnter {
+                prepareForOverviewDismissal()
+            }
             return false
         case .updated:
             updateSearchUI()
@@ -206,7 +212,7 @@ extension MissionControlHoverService {
             "activateSelectedWindow: activating window at middle point \(activationPoint)",
             category: AppLogger.missionControl
         )
-        handleDeactivated()
+        prepareForOverviewDismissal()
         WindowActivationAction.performSyntheticClick(at: activationPoint)
     }
 

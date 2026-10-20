@@ -49,6 +49,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 "isAutoEjectEnabled": vm.config.isAutoEjectEnabled,
                 "isHoverTracking": vm.hoverService.isTracking,
                 "isHoverEnabled": vm.hoverService.isEnabled,
+                "areWindowLabelsEnabled": vm.hoverService.areWindowLabelsEnabled,
+                "visibleWindowLabelCount": vm.hoverService.visibleWindowLabelCount,
                 "isDragging": vm.hoverService.isDragging,
                 "trackedWindowsCount": vm.hoverService.trackedWindowsCount
             ]
@@ -63,6 +65,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     "w": frame.width,
                     "h": frame.height
                 ]
+            }
+            if let hover = vm.hoverService as? MissionControlHoverService {
+                state["isHoverMissionControlActive"] = hover.isMissionControlActive
+                state["isLabelDismissalPending"] = hover.isLabelDismissalPending
+                state["isOverviewGestureInProgress"] = hover.isOverviewGestureInProgress
+                state["isSpaceTransitioning"] = hover.isSpaceTransitioning
+                state["needsStableLabelLayout"] = hover.needsStableLabelLayout
+                state["entryLabelEarlyRefreshesRemaining"] = hover.entryLabelEarlyRefreshesRemaining
             }
             return state
         }

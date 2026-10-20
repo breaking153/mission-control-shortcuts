@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.9.0 (20 Oct 2026)
+
+- **Persistent Mission Control Labels**: Keep window titles and application icons visible. Settings independently control label position, icon placement, icon size, and title size. The hovered preview uses the native label to avoid duplicates. Labels appear at their final preview positions, stay visible for other windows during dragging, and hide promptly on overview exit or desktop changes.
+- **Preview Window Controls**: Added separate close, minimize, and fullscreen controls, with a 75–200% size setting and larger adjacent click targets. Fullscreen now exits Mission Control before applying the transition, because macOS can acknowledge an in-overview request without performing it.
+- **Tap Close and Hold to Quit**: Tap X for up to 0.25 seconds to close its window. Hold for 1 second to request a normal application quit, preserving unsaved-document confirmation. Releasing between those thresholds cancels. The progress ring and gradual shake begin after 0.25 seconds; cancellation retracts the ring and damps motion. Exit and reentry clear pending feedback and actions.
+- **Larger Native Window Button Hit Areas**: Independently scale the invisible click margins of ordinary-window traffic lights from 100–300%, without changing their appearance. Direct native clicks pass through; expanded margins cancel when dragged out and do not extend outside the window.
+- **Overview and Gesture Recovery**: Detect replacement overview canvases during rapid reentry, retry transient preview resolution at a stationary pointer, and use actual panel visibility for X recovery. Preserve two-finger gestures and distinguish held overview drags from exit gestures across Spaces and displays.
+- **Validation**: Release builds and static analysis passed. Local validation covered 32 actual compatibility interactions, 12 repeated overview sessions, tap/hold boundaries, desktop/fullscreen transitions, native click margins, and rendered feedback timing. No test files were added to the repository.
+
+### Known limitations
+
+- The strict decimal 13 MB memory gate has not passed: local cold-launch samples were approximately 13.1 MB, and a separately reauthorized ordinary launch settled around 13.5 MB. Interaction memory is higher. A local leak scan also reported about 20 KB in Apple `com.apple.linkd.autoShortcut` XPC cycles; it is not a zero-leak pass.
+- Distributed builds use ad-hoc signing and are not notarized. Replacing an existing build can require removing and re-adding MCSC in System Settings → Privacy & Security → Accessibility. Apple Silicon and macOS 27.0 or later are required for the packaged build.
+- This fork's Release contains the features above. The upstream Homebrew tap is not updated by this fork.
+
 ## 0.8.2 (18 Oct 2026)
 
 - **Unified Shortcut Routing Across Modifiers**: Fixed an issue in `ShortcutActionRouter` where window sizing shortcuts (`Fill Screen`, `Small and Center`, `Larger`, `Smaller`, `Left Cycle Snap`, `Right Cycle Snap`) and desktop navigation (`Next Desktop`, `Previous Desktop`) failed to trigger when assigned without Shift (e.g. `⌘ Return`, `⌘ '`, `⌘ =`, `⌘ -`, `⌘ ←`, `⌘ →`, `⌘ L`, `⌘ K`). Decomposed and unified action dispatch so all configured actions route reliably with or without Shift.

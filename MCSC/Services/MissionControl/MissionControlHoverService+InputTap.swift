@@ -49,6 +49,7 @@ extension MissionControlHoverService {
     /// Dispatches events received on the input tap. Returns the event to pass through, or nil to swallow.
     private func handleTapEvent(type: CGEventType, event: CGEvent) -> CGEvent? {
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+            cancelCloseButtonPress()
             if let tap = eventTap {
                 CGEvent.tapEnable(tap: tap, enable: true)
             }
@@ -90,41 +91,42 @@ extension MissionControlHoverService {
                 return nil // Swallow the click so Mission Control does not dismiss prematurely
             }
 
-            let dismissActions = { [weak self] in
-                self?.hideAllOverlays()
-            }
-            if Thread.isMainThread {
-                dismissActions()
-            } else {
-                DispatchQueue.main.async { dismissActions() }
-            }
             return event
         }
 
         if type == .leftMouseDragged {
             let location = event.location
+            var intercepted = false
             let notifyDrag = { [weak self] in
+                intercepted = self?.consumesCloseButtonMouseUp ?? false
                 self?.handleMouseDragged(at: location)
             }
             if Thread.isMainThread {
                 notifyDrag()
             } else {
-                DispatchQueue.main.async { notifyDrag() }
+                DispatchQueue.main.sync { notifyDrag() }
             }
-            return event
+            return intercepted ? nil : event
         }
 
         if type == .leftMouseUp {
             let location = event.location
+            var intercepted = false
             let notifyUp = { [weak self] in
+                if self?.finishCloseButtonPress(at: location) == true {
+                    intercepted = true
+                    return
+                }
                 self?.handleMouseUp(at: location)
             }
             if Thread.isMainThread {
                 notifyUp()
             } else {
-                DispatchQueue.main.async { notifyUp() }
+                // Preview selection can dismiss the overview on this event.
+                // Order panels out before WindowServer receives mouse-up.
+                DispatchQueue.main.sync { notifyUp() }
             }
-            return event
+            return intercepted ? nil : event
         }
 
         let location = event.location

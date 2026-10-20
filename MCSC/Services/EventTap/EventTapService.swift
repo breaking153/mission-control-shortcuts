@@ -19,8 +19,15 @@ typealias CFEventTimestamp = CGEventTimestamp
 protocol EventTapServiceProtocol: AnyObject {
     typealias ShortcutDetectedCallback = (Int64, CGEventFlags, CGPoint) -> Bool
     var onShortcutDetected: ShortcutDetectedCallback? { get set }
+    var onMouseEvent: ((CGEventType, CGEvent) -> Bool)? { get set }
     func start()
     func stop()
+}
+
+extension EventTapServiceProtocol {
+    var onMouseEvent: ((CGEventType, CGEvent) -> Bool)? {
+        get { nil } set {}
+    }
 }
 
 final class EventTapService: EventTapServiceProtocol {
@@ -28,12 +35,17 @@ final class EventTapService: EventTapServiceProtocol {
     private var runLoopSource: CFRunLoopSource?
 
     var onShortcutDetected: ShortcutDetectedCallback?
+    var onMouseEvent: ((CGEventType, CGEvent) -> Bool)?
 
     /// Installs a `keyDown` event tap on the current run loop and enables it.
     /// If no tap can be created (e.g. missing Accessibility permission), the
     /// call is a no-op and the failure is logged.
     func start() {
+        guard eventTap == nil else { return }
         let eventMask = (1 << CGEventType.keyDown.rawValue)
+            | (1 << CGEventType.leftMouseDown.rawValue)
+            | (1 << CGEventType.leftMouseDragged.rawValue)
+            | (1 << CGEventType.leftMouseUp.rawValue)
 
         guard let eventTap = CGEvent.tapCreate(
             tap: .cghidEventTap,
@@ -47,6 +59,9 @@ final class EventTapService: EventTapServiceProtocol {
                 // macOS disables event taps on timeout or user input; re-enable
                 // so shortcuts survive without an app restart.
                 service.reEnableTapIfDisabled(for: type)
+                if type != .keyDown, service.onMouseEvent?(type, event) == true {
+                    return nil
+                }
 
                 if type == .keyDown {
                     let handled = AppSignpost.trace(AppSignpost.eventTap, "keyDownDispatch") { () -> Bool in
@@ -83,8 +98,7 @@ final class EventTapService: EventTapServiceProtocol {
     /// input). Without this, the tap silently dies and shortcuts stop working
     /// until the app is restarted.
     private func reEnableTapIfDisabled(for type: CGEventType) {
-        guard type == .tapDisabledByTimeout || type == .tapDisabledByUserInput else { return }
-        guard let eventTap else { return }
+        guard type == .tapDisabledByTimeout || type == .tapDisabledByUserInput, let eventTap else { return }
         CGEvent.tapEnable(tap: eventTap, enable: true)
         let reason = type == .tapDisabledByTimeout ? "timeout" : "user input"
         AppLogger.eventTap.warning("Event tap disabled by system (\(reason, privacy: .public)); re-enabled.")

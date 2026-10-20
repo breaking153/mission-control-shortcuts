@@ -48,7 +48,9 @@ jobs:
             -sdk macosx \
             -destination "platform=macOS,arch=arm64" \
             -derivedDataPath ./build/DerivedData \
-            MACOSX_DEPLOYMENT_TARGET="$(xcrun --show-sdk-version)" \
+            MACOSX_DEPLOYMENT_TARGET="27.0" \
+            ARCHS=arm64 \
+            ONLY_ACTIVE_ARCH=YES \
             CODE_SIGN_IDENTITY="-" \
             CODE_SIGNING_REQUIRED=YES \
             CODE_SIGNING_ALLOWED=YES
@@ -134,7 +136,7 @@ jobs:
 
       # Automatically update Homebrew tap cask (Casks/mcsc.rb) with new version & SHA256
       - name: Update Homebrew Tap
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') && github.repository_owner == 'ShubhamJ010'
         env:
           TAP_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
         run: |

@@ -24,6 +24,9 @@ protocol SpaceManagementServiceProtocol: AnyObject {
     /// Returns the ManagedSpaceID of the active space on the main display, or nil if indeterminate.
     func currentSpaceID() -> Int?
 
+    /// Maps each identified display to its currently active ManagedSpaceID.
+    func activeDisplaySpaces() -> [CGDirectDisplayID: Int]
+
     /// Returns the list of space IDs assigned to the given window.
     func spaceIDs(for windowID: CGWindowID) -> [Int]
 
@@ -53,6 +56,55 @@ final class SpaceManagementService: SpaceManagementServiceProtocol {
             return nil
         }
         return spaceID
+    }
+
+    func activeDisplaySpaces() -> [CGDirectDisplayID: Int] {
+        let cid = Self.CGSMainConnectionID()
+        guard let displays = Self.CGSCopyManagedDisplaySpaces(cid) as? [[String: Any]] else {
+            return [:]
+        }
+
+        let displayIDs = NSScreen.screens.compactMap { screen in
+            (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value
+        }
+        // With shared Spaces, CGS exposes one desktop for every connected screen.
+        if displays.count == 1,
+           let display = displays.first,
+           let identifier = display["Display Identifier"] as? String,
+           identifier.uppercased() == "MAIN",
+           let currentSpace = display["Current Space"] as? [String: Any],
+           let spaceID = currentSpace["ManagedSpaceID"] as? Int {
+            var sharedSpaces: [CGDirectDisplayID: Int] = [:]
+            for displayID in displayIDs {
+                sharedSpaces[displayID] = spaceID
+            }
+            return sharedSpaces
+        }
+
+        let mainDisplayID = CGMainDisplayID()
+        var displayIDsByIdentifier: [String: CGDirectDisplayID] = [:]
+        for displayID in displayIDs {
+            if displayID == mainDisplayID {
+                displayIDsByIdentifier["MAIN"] = displayID
+            }
+            // This Create API returns an owned CFUUID; transfer it to ARC.
+            guard let unmanagedUUID = CGDisplayCreateUUIDFromDisplayID(displayID) else { continue }
+            let uuid = unmanagedUUID.takeRetainedValue()
+            let identifier = CFUUIDCreateString(kCFAllocatorDefault, uuid) as String
+            displayIDsByIdentifier[identifier.uppercased()] = displayID
+        }
+
+        var activeSpaces: [CGDirectDisplayID: Int] = [:]
+        for display in displays {
+            guard let identifier = display["Display Identifier"] as? String,
+                  let displayID = displayIDsByIdentifier[identifier.uppercased()],
+                  let currentSpace = display["Current Space"] as? [String: Any],
+                  let spaceID = currentSpace["ManagedSpaceID"] as? Int else {
+                continue
+            }
+            activeSpaces[displayID] = spaceID
+        }
+        return activeSpaces
     }
 
     /// Returns the set of ManagedSpaceIDs for active spaces across all connected displays.

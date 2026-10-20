@@ -262,8 +262,7 @@ final class DiagnosticService: DiagnosticServiceProtocol {
             let isoFormatter = ISO8601DateFormatter()
 
             for entry in entries {
-                guard let log = entry as? OSLogEntryLog else { continue }
-                guard log.subsystem == AppLogger.subsystem else { continue }
+                guard let log = entry as? OSLogEntryLog, log.subsystem == AppLogger.subsystem else { continue }
 
                 let record: [String: Any] = [
                     "timestamp": isoFormatter.string(from: log.date),

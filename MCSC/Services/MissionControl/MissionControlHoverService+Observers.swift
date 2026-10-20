@@ -62,14 +62,21 @@ extension MissionControlHoverService {
 
     func handleActivated() {
         guard !isMissionControlActive else { return }
+        overviewSessionGeneration &+= 1
+        fullscreenRequestGeneration &+= 1
+        AppLogger.missionControl.info("Overview tracking session activated")
         debugLog("MissionControlHoverService.handleActivated called", category: AppLogger.missionControl)
         isMissionControlActive = true
+        isLabelDismissalPending = false
+        entryLabelDeadline = areWindowLabelsEnabled ? CACurrentMediaTime() + 0.7 : nil
+        entryLabelEarlyRefreshesRemaining = areWindowLabelsEnabled ? 24 : 0
+        requireStableLabelLayout()
         lastKnownSpaceID = spaceService.currentSpaceID()
 
-        guard isEnabled else { return }
+        guard isSessionEnabled else { return }
 
-        fetchWindows()
         startWindowFetchTimer()
+        fetchWindows()
         startKeyboardSession()
 
         if let mouseLocation = CGEvent(source: nil)?.location {
@@ -78,10 +85,18 @@ extension MissionControlHoverService {
     }
 
     func handleDeactivated() {
+        overviewSessionGeneration &+= 1
+        AppLogger.missionControl.info("Overview tracking session deactivated")
         debugLog("MissionControlHoverService.handleDeactivated called", category: AppLogger.missionControl)
         isMissionControlActive = false
+        isLabelDismissalPending = false
+        isOverviewGestureInProgress = false
+        clearWindowLabelEntryScheduling()
+        requireStableLabelLayout()
+        missionControlSpacesBarFrames.removeAll(keepingCapacity: false)
         isDragging = false
         isMouseDown = false
+        pressedPreviewWindowID = nil
         isSpaceTransitioning = false
         spaceTransitionTimeoutTimer?.invalidate()
         spaceTransitionTimeoutTimer = nil

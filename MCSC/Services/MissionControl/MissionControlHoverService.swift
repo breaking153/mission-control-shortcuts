@@ -4,6 +4,10 @@ import Cocoa
 @MainActor
 protocol MissionControlHoverServiceProtocol: AnyObject {
     var isEnabled: Bool { get set }
+    var areWindowLabelsEnabled: Bool { get set }
+    var windowLabelStyle: MissionControlLabelStyle { get set }
+    var windowButtonScale: CGFloat { get set }
+    var visibleWindowLabelCount: Int { get }
     var isTracking: Bool { get }
     var isMissionControlActive: Bool { get }
     var isDragging: Bool { get }
@@ -20,6 +24,7 @@ protocol MissionControlHoverServiceProtocol: AnyObject {
     func clearSearch()
     func beginSpaceTransition()
     func beginSpaceTransition(duration: TimeInterval)
+    func setOverviewGestureInProgress(_ inProgress: Bool)
 
     /// Resolves the Mission Control preview window metadata under `point`,
     /// honoring space isolation and active preview hysteresis.
@@ -31,6 +36,10 @@ protocol MissionControlHoverServiceProtocol: AnyObject {
 }
 
 extension MissionControlHoverServiceProtocol {
+    var windowButtonScale: CGFloat {
+        get { 1.25 } set {}
+    }
+
     func beginSpaceTransition() {
         beginSpaceTransition(duration: 0.35)
     }
@@ -38,7 +47,7 @@ extension MissionControlHoverServiceProtocol {
 
 @MainActor
 final class MissionControlHoverService: MissionControlHoverServiceProtocol {
-    private let accessibilityService: AccessibilityServiceProtocol
+    let accessibilityService: AccessibilityServiceProtocol
     let isMissionControlActiveProvider: () -> Bool
     /// Weak ref to the shared detector so transitions can be pushed in via
     /// `markActive`. Weak because the ViewModel owns both services.
@@ -49,6 +58,64 @@ final class MissionControlHoverService: MissionControlHoverServiceProtocol {
     private var injectedSearchOverlay: (any SearchBarOverlayProtocol)?
     private var createdSearchOverlay: (any SearchBarOverlayProtocol)?
     private let animationStrategy: OverlayAnimationStrategy
+    var labelsOverlay: MissionControlLabelsOverlay?
+    var labelDisplaySpaces: [CGDirectDisplayID: Int] = [:]
+    var labelsPurgeObserver: NSObjectProtocol?
+    var labelsScreenObserver: NSObjectProtocol?
+    /// Exit intent precedes WindowManager's animation/AX exit notification.
+    /// Keep labels suppressed until that session has actually ended.
+    var isLabelDismissalPending = false
+    var pressedPreviewWindowID: CGWindowID?
+    var closeButtonPress: MissionControlCloseButtonPress?
+    var closeButtonHoldTimer: Timer?
+    var consumesCloseButtonMouseUp = false
+    var overviewSessionGeneration: UInt = 0
+    var fullscreenRequestGeneration: UInt = 0
+    var windowButtonScale: CGFloat = 1.25 {
+        didSet {
+            windowButtonScale = MissionControlWindowButtonLayout(scale: windowButtonScale).scale
+            guard windowButtonScale != oldValue else { return }
+            cancelCloseButtonPress()
+            injectedOverlay?.buttonScale = windowButtonScale
+            createdOverlay?.buttonScale = windowButtonScale
+            updateWindowButtonScale()
+        }
+    }
+
+    var isOverviewGestureInProgress = false
+    var needsStableLabelLayout = true
+    var settlingLabelFrames: [CGWindowID: CGRect] = [:]
+    var labelLayoutStableSince: CFTimeInterval?
+    var entryLabelDeadline: CFTimeInterval?
+    var entryLabelEarlyRefreshesRemaining = 0
+    var isWindowFetchTimerFiring = false
+    var missionControlSpacesBarFrames: [CGRect] = []
+    var windowLabelStyle = MissionControlLabelStyle() {
+        didSet {
+            guard windowLabelStyle != oldValue else { return }
+            releaseWindowLabels()
+            refreshWindowLabels()
+        }
+    }
+
+    var areWindowLabelsEnabled = false {
+        didSet {
+            guard areWindowLabelsEnabled != oldValue else { return }
+            if !areWindowLabelsEnabled {
+                releaseWindowLabels()
+                requireStableLabelLayout()
+            }
+            updateSessionFeatures()
+        }
+    }
+
+    var visibleWindowLabelCount: Int {
+        labelsOverlay?.visibleLabelCount ?? 0
+    }
+
+    var isSessionEnabled: Bool {
+        isEnabled || areWindowLabelsEnabled
+    }
 
     /// Lazily created on first access so no `NSPanel` (and its GPU/IOSurface
     /// layer tree) exists until the overlay is actually needed. Tests can inject
@@ -61,6 +128,7 @@ final class MissionControlHoverService: MissionControlHoverServiceProtocol {
             return createdOverlay
         }
         let newOverlay = PreviewCloseButtonOverlay(strategy: animationStrategy)
+        newOverlay.buttonScale = windowButtonScale
         createdOverlay = newOverlay
         return newOverlay
     }
@@ -90,7 +158,7 @@ final class MissionControlHoverService: MissionControlHoverServiceProtocol {
     /// Internal: installed by `+Observers.swift`.
     var axObserver: AXObserver?
     var dockAXElement: AXUIElement?
-    private var windowFetchTimer: Timer?
+    var windowFetchTimer: Timer?
     /// Internal so tests can verify lifecycle without exposing to production
     /// callers outside the module.
     var spaceChangeObserver: NSObjectProtocol?
@@ -115,7 +183,7 @@ final class MissionControlHoverService: MissionControlHoverServiceProtocol {
         windows = seeded
     }
 
-    private var isTestSeedingEnabled = false
+    var isTestSeedingEnabled = false
 
     private(set) var isTracking = false
     /// Internal: driven by `+Observers.swift` AXExpose notifications.
@@ -131,7 +199,7 @@ final class MissionControlHoverService: MissionControlHoverServiceProtocol {
     private var isOptionHeld = false
     private var isControlHeld = false
     private var hoveredWindow: [String: Any]?
-    private var overlayRect: CGRect?
+    private(set) var overlayRect: CGRect?
     /// Visual frame of the currently hovered Mission Control preview tile in AX coordinates.
     private(set) var currentPreviewFrame: CGRect?
     private var isOverlayHovered = false
@@ -211,23 +279,9 @@ final class MissionControlHoverService: MissionControlHoverServiceProtocol {
         didSet {
             guard isEnabled != oldValue else { return }
             if !isEnabled {
-                // Fully tear down the hover session: stop window polling,
-                // keyboard navigation, and hide all overlays. The Dock
-                // AXObserver and event tap remain alive so we still track
-                // isMissionControlActive for other services.
-                stopWindowFetchTimer()
-                stopKeyboardSession()
-                hideAllOverlays()
-            } else if isMissionControlActive {
-                // Re-enabled while Mission Control is already open:
-                // spin up the full session so the user sees the button.
-                fetchWindows()
-                startWindowFetchTimer()
-                startKeyboardSession()
-                if let mouseLocation = CGEvent(source: nil)?.location {
-                    updateOverlay(at: mouseLocation)
-                }
+                hideCloseOverlay()
             }
+            updateSessionFeatures()
         }
     }
 
@@ -264,26 +318,46 @@ final class MissionControlHoverService: MissionControlHoverServiceProtocol {
         setupDockObserver()
         startInputTap()
         setupSpaceChangeObserver()
+        setupWindowLabelObservers()
+        if isMissionControlActiveProvider() {
+            handleActivated()
+            updateSessionFeatures()
+        }
     }
 
     func stop() {
         guard isTracking else { return }
+        overviewSessionGeneration &+= 1
+        fullscreenRequestGeneration &+= 1
         isDragging = false
         isMouseDown = false
+        pressedPreviewWindowID = nil
         spaceTransitionTimeoutTimer?.invalidate()
         spaceTransitionTimeoutTimer = nil
         isSpaceTransitioning = false
+        isLabelDismissalPending = false
+        isOverviewGestureInProgress = false
+        clearWindowLabelEntryScheduling()
+        requireStableLabelLayout()
+        missionControlSpacesBarFrames.removeAll(keepingCapacity: false)
         stopDockObserver()
         stopInputTap()
+        consumesCloseButtonMouseUp = false
         stopWindowFetchTimer()
         removeSpaceChangeObserver()
         stopKeyboardSession()
         hideAllOverlays()
+        removeWindowLabelObservers()
+        windows = []
+        isMissionControlActive = false
         isTracking = false
     }
 
     /// Suppresses overlays during in-flight space transitions (swipes or Ctrl+Arrow/Number keys).
     func beginSpaceTransition(duration: TimeInterval = 0.35) {
+        pressedPreviewWindowID = nil
+        clearWindowLabelEntryScheduling()
+        requireStableLabelLayout()
         if !isSpaceTransitioning {
             isSpaceTransitioning = true
             hideAllOverlays()
@@ -293,6 +367,8 @@ final class MissionControlHoverService: MissionControlHoverServiceProtocol {
             overlayRect = nil
         }
         spaceTransitionTimeoutTimer?.invalidate()
+        spaceTransitionTimeoutTimer = nil
+        guard !isOverviewGestureInProgress else { return }
         armSpaceTransitionTimeout(duration: duration)
     }
 
@@ -300,7 +376,7 @@ final class MissionControlHoverService: MissionControlHoverServiceProtocol {
         spaceTransitionTimeoutTimer = Timer
             .scheduledTimer(withTimeInterval: duration, repeats: false) { [weak self] _ in
                 MainActor.assumeIsolated {
-                    guard let self else { return }
+                    guard let self, !self.isOverviewGestureInProgress else { return }
                     self.isSpaceTransitioning = false
                     self.spaceTransitionTimeoutTimer = nil
                     if self.isMissionControlActive {
@@ -313,27 +389,7 @@ final class MissionControlHoverService: MissionControlHoverServiceProtocol {
             }
     }
 
-    // MARK: - Dock AXObserver & Input Event Tap live in the `+Observers` /
-
-    // `+InputTap` splits.
-
-    // MARK: - Window Polling
-
-    func startWindowFetchTimer() {
-        guard windowFetchTimer == nil else { return }
-        windowFetchTimer = Timer.scheduledCommon(
-            interval: HoverServiceTiming.windowPoll,
-            repeats: true,
-            tolerance: HoverServiceTiming.windowPollTolerance
-        ) { [weak self] _ in
-            self?.fetchWindows()
-        }
-    }
-
-    func stopWindowFetchTimer() {
-        windowFetchTimer?.invalidate()
-        windowFetchTimer = nil
-    }
+    // Dock AXObserver and input tap live in the +Observers and +InputTap splits.
 
     // MARK: - Space Change Tracking
 
@@ -378,6 +434,10 @@ final class MissionControlHoverService: MissionControlHoverServiceProtocol {
         currentMatches = []
         searchSession = WindowSearchSession()
 
+        if areWindowLabelsEnabled, isMissionControlActive {
+            beginSpaceTransition()
+        }
+
         fetchWindows()
 
         guard isMissionControlActive || isMissionControlActiveProvider() else {
@@ -398,118 +458,120 @@ final class MissionControlHoverService: MissionControlHoverServiceProtocol {
         }
     }
 
-    /// Fetches and filters the active window list for Mission Control tracking.
-    ///
-    /// ## macOS 27 WindowManager Multi-Space Isolation
-    /// On macOS 27+, `com.apple.WindowManager` manages Mission Control at Layer 19.
-    /// Crucially, its AX accessibility hierarchy retains preview tiles (`AXButton` elements
-    /// with a `"wid"` attribute) for **all desktop spaces simultaneously** at their virtual
-    /// desktop layout coordinates.
-    ///
-    /// If off-space windows are included in `windows`, `accessibilityService.getMissionControlPreviewTile`
-    /// will hit-test and match ghost preview tiles from inactive spaces (e.g. hovering over Desktop 2
-    /// hitting a Desktop 1 Ghostty window thumbnail).
-    ///
-    /// To ensure strict space isolation:
-    /// 1. Only windows where `spaceService.isWindowOnCurrentSpace(windowID:) == true` are tracked.
-    /// 2. Windows with no explicit space assignment (empty space IDs) belong to all spaces (e.g. floating Finder or
-    /// panels).
-    /// 3. Layers 0 through 3 are captured so floating utility and tool windows on secondary spaces are retained.
-    func fetchWindows() {
-        // Frozen by `_testSeedWindows` in unit tests so assertions are
-        // deterministic regardless of the host's real window list.
-        guard !isTestSeedingEnabled else { return }
-
-        guard let list = CGWindowListCopyWindowInfo(
-            [.optionAll, .excludeDesktopElements],
-            kCGNullWindowID
-        ) as? [[String: Any]] else {
-            return
-        }
-
-        let filtered = list.filter { window in
-            guard let layer = window[kCGWindowLayer as String] as? Int, layer >= 0, layer <= 3,
-                  let owner = window[kCGWindowOwnerName as String] as? String,
-                  owner != "Dock", owner != "MCSC", owner != "Window Server", owner != "WindowManager",
-                  let wid = window[kCGWindowNumber as String] as? CGWindowID,
-                  spaceService.isWindowOnCurrentSpace(windowID: wid) else {
-                return false
-            }
-            if let bounds = window[kCGWindowBounds as String] as? [String: CGFloat],
-               let w = bounds["Width"], let h = bounds["Height"], w >= 100, h >= 100 {
-                return true
-            }
-            return false
-        }
-
-        // Skip the assignment and overlay recomputation when the window list is
-        // unchanged. A fast check on window count and IDs avoids redundant work on every 500ms poll.
-        let isSame = filtered.count == windows.count && zip(filtered, windows).allSatisfy { f, w in
-            (f[kCGWindowNumber as String] as? CGWindowID) == (w[kCGWindowNumber as String] as? CGWindowID)
-        }
-        if !isSame {
-            windows = filtered
-        }
-    }
-
-    // MARK: - Input Event Tap lives in `+InputTap.swift`.
-
     func handleFlagsChanged(cmdPressed: Bool, optionPressed: Bool, controlPressed: Bool = false) {
         guard isTracking, isEnabled else { return }
         isCmdHeld = cmdPressed
         isOptionHeld = optionPressed
         isControlHeld = controlPressed
-        overlay.setMode(currentOverlayMode)
+        if !consumesCloseButtonMouseUp {
+            overlay.setMode(currentOverlayMode)
+        }
     }
 
     func handleMouseDown(at location: CGPoint) -> Bool {
-        guard isTracking && isEnabled, isMissionControlActive || isMissionControlActiveProvider() else {
-            return false
+        if consumesCloseButtonMouseUp {
+            cancelCloseButtonPress()
+            consumesCloseButtonMouseUp = false
         }
-
-        guard let rect = overlayRect, rect.contains(location), let window = hoveredWindow else {
-            debugLog(
-                "handleMouseDown: click at \(location) outside overlay - hiding overlays and preparing drag",
-                category: AppLogger.missionControl
-            )
-            isMouseDown = true
+        guard isTracking && isSessionEnabled, isMissionControlActive || isMissionControlActiveProvider() else {
             hideAllOverlays()
             return false
         }
 
-        debugLog("handleMouseDown: click at \(location) on overlay close button", category: AppLogger.missionControl)
+        guard isEnabled, let rect = overlayRect, rect.contains(location), overlay.isVisible,
+              let action = overlay.action(at: location),
+              let window = hoveredWindow else {
+            debugLog(
+                "handleMouseDown: click at \(location) outside overlay - hiding overlays and preparing drag",
+                category: AppLogger.missionControl
+            )
+            let previewID = labelsOverlay?.windowID(at: location)
+                ?? (currentPreviewFrame?.contains(location) == true
+                    ? hoveredWindow?[kCGWindowNumber as String] as? CGWindowID : nil)
+            isMouseDown = true
+            pressedPreviewWindowID = previewID
+            if let previewID {
+                // Native preview selection happens on mouse-up; keep the other
+                // labels visible while this press can still become a drag.
+                clearWindowLabelEntryScheduling()
+                labelsOverlay?.setDraggedWindowID(previewID)
+                hideCloseOverlay()
+                hideSearchOverlay()
+                return false
+            }
+            prepareForOverviewDismissal()
+            // Spaces controls can add/remove desktops without dismissing
+            // the overview. Resume only after its new layout is stable.
+            if isMissionControlSpaceControl(at: location) {
+                isLabelDismissalPending = false
+                beginSpaceTransition()
+            }
+            return false
+        }
+
+        debugLog(
+            "handleMouseDown: click at \(location) on overlay action \(action)",
+            category: AppLogger.missionControl
+        )
         HapticService.perform(.pinchIn)
-        executeAction(mode: currentOverlayMode, on: window)
+        if action == .close, beginCloseButtonPress(on: window, at: location) {
+            return true
+        }
+        executeAction(mode: action, on: window)
         return true
     }
 
-    func handleMouseDragged(at _: CGPoint) {
-        guard isTracking, isEnabled else { return }
+    func handleMouseDragged(at location: CGPoint) {
+        if consumesCloseButtonMouseUp {
+            updateCloseButtonPress(at: location)
+            return
+        }
+        guard isTracking, isSessionEnabled, isMissionControlActive, isMouseDown else { return }
         isDragging = true
         hideCloseOverlay()
+        hideSearchOverlay()
     }
 
     func handleMouseUp(at _: CGPoint) {
-        guard isTracking, isEnabled else {
+        guard isTracking, isSessionEnabled else {
             isDragging = false
             isMouseDown = false
+            pressedPreviewWindowID = nil
             return
         }
         let wasDragging = isDragging
+        let selectedPreview = pressedPreviewWindowID != nil
         isDragging = false
         isMouseDown = false
+        pressedPreviewWindowID = nil
         if wasDragging {
             hoveredWindow = nil
             currentPreviewFrame = nil
             overlayRect = nil
-            if !isTestSeedingEnabled {
-                fetchWindows()
-            }
+            beginSpaceTransition()
+        } else if selectedPreview {
+            prepareForOverviewDismissal()
+        } else if !isLabelDismissalPending, isMissionControlActive {
+            beginSpaceTransition()
         }
     }
 
+    private func updateWindowLabelHover(at point: CGPoint) {
+        guard areWindowLabelsEnabled, !isLabelDismissalPending,
+              !isSpaceTransitioning, !isOverviewGestureInProgress,
+              !isDragging, !isMouseDown, !consumesCloseButtonMouseUp else { return }
+        labelsOverlay?.updateHover(at: labelHoverLocation(at: point))
+    }
+
     func handleMouseMoved(at mouseLocation: CGPoint) {
-        guard isTracking, isEnabled, !isDragging, !isMouseDown else {
+        if consumesCloseButtonMouseUp {
+            updateCloseButtonPress(at: mouseLocation)
+            return
+        }
+        // Label hit testing uses the existing preview snapshot, before the
+        // slower AX/WindowServer throttle, and never consumes mouse input.
+        updateWindowLabelHover(at: mouseLocation)
+        guard isTracking, isSessionEnabled, !isDragging, !isMouseDown else {
             if isDragging || isMouseDown {
                 hideCloseOverlay()
             } else {
@@ -520,11 +582,9 @@ final class MissionControlHoverService: MissionControlHoverServiceProtocol {
 
         // Fast-path: if already hovering the button, keep it cheap and
         // bypass MC-active IPC throttling so hover feels instant.
-        if let rect = overlayRect, rect.contains(mouseLocation), hoveredWindow != nil {
-            if !isOverlayHovered {
-                isOverlayHovered = true
-                overlay.setHovered(true)
-            }
+        if let rect = overlayRect, rect.contains(mouseLocation), hoveredWindow != nil, overlay.isVisible {
+            isOverlayHovered = true
+            overlay.setHovered(at: mouseLocation)
             return
         }
 
@@ -564,8 +624,9 @@ final class MissionControlHoverService: MissionControlHoverServiceProtocol {
     /// 3. Resolving the preview tile under cursor via Accessibility (macOS 27 WindowManager preview buttons).
     /// 4. Falls back to window frames seeded during unit testing.
     /// 5. Otherwise hides the overlay.
-    func updateOverlay(at mouseLocation: CGPoint) {
-        guard !isDragging, !isMouseDown, !isSpaceTransitioning else {
+    func updateOverlay(at mouseLocation: CGPoint, forceRefresh: Bool = false) {
+        guard !isDragging, !isMouseDown, !isSpaceTransitioning,
+              !isOverviewGestureInProgress, !isLabelDismissalPending else {
             hideCloseOverlay()
             return
         }
@@ -580,11 +641,9 @@ final class MissionControlHoverService: MissionControlHoverServiceProtocol {
         }
 
         // 1. If mouse is hovering over the action button itself, keep it visible
-        if let rect = overlayRect, rect.contains(mouseLocation), hoveredWindow != nil {
-            if !isOverlayHovered {
-                isOverlayHovered = true
-                overlay.setHovered(true)
-            }
+        if let rect = overlayRect, rect.contains(mouseLocation), hoveredWindow != nil, overlay.isVisible {
+            isOverlayHovered = true
+            overlay.setHovered(at: mouseLocation)
             return
         }
 
@@ -597,7 +656,8 @@ final class MissionControlHoverService: MissionControlHoverServiceProtocol {
         // 2. Active preview tile hysteresis:
         // If cursor is still inside the current preview tile's visual bounds and the hovered window is valid
         // on the active desktop space, keep the overlay firmly anchored.
-        if let currentPreviewFrame, currentPreviewFrame.contains(mouseLocation),
+        if !forceRefresh, let currentPreviewFrame, currentPreviewFrame.contains(mouseLocation),
+           !isEnabled || (overlayRect != nil && overlay.isVisible),
            let hovered = hoveredWindow,
            let wid = hovered[kCGWindowNumber as String] as? CGWindowID,
            isTestSeedingEnabled ||
@@ -633,8 +693,10 @@ final class MissionControlHoverService: MissionControlHoverServiceProtocol {
                 hoveredWindow = winInfo
                 currentPreviewFrame = previewFrame
                 let closeButtonFrame = accessibilityService.getPreviewCloseButtonFrame(for: tileElement)
-                overlay.show(for: previewFrame, closeButtonFrame: closeButtonFrame, mode: currentOverlayMode)
-                overlayRect = overlay.currentAXRect
+                if isEnabled {
+                    overlay.show(for: previewFrame, closeButtonFrame: closeButtonFrame, mode: currentOverlayMode)
+                    overlayRect = overlay.currentAXRect
+                }
                 return
             }
         }
@@ -668,6 +730,7 @@ final class MissionControlHoverService: MissionControlHoverServiceProtocol {
 
     /// Hides the close/action button overlay and clears active preview frame state.
     func hideCloseOverlay() {
+        cancelCloseButtonPress()
         if hoveredWindow != nil || overlay.isVisible || currentPreviewFrame != nil {
             hoveredWindow = nil
             currentPreviewFrame = nil
@@ -688,6 +751,7 @@ final class MissionControlHoverService: MissionControlHoverServiceProtocol {
     /// Synchronously hides all Mission Control overlays (both close button and search bar)
     /// following unified lifecycle management (DRY).
     func hideAllOverlays() {
+        releaseWindowLabels()
         hideCloseOverlay()
         hideSearchOverlay()
     }
@@ -802,7 +866,7 @@ final class MissionControlHoverService: MissionControlHoverServiceProtocol {
         case .quit:
             MissionControlWindowActions.performForceQuit(on: windowInfo)
         case .fullscreen:
-            MissionControlWindowActions.performFullscreen(on: windowInfo, accessibilityService: accessibilityService)
+            requestFullscreenAfterOverviewExit(on: windowInfo)
         }
 
         if let windowID = windowInfo[kCGWindowNumber as String] as? CGWindowID {
@@ -815,6 +879,13 @@ final class MissionControlHoverService: MissionControlHoverServiceProtocol {
     }
 
     deinit {
+        closeButtonHoldTimer?.invalidate()
+        if let observer = labelsPurgeObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        if let observer = labelsScreenObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
         if let obs = axObserver {
             CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(obs), .commonModes)
         }

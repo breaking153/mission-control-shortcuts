@@ -134,11 +134,10 @@ enum MissionControlWindowActions {
 
     /// Toggles a window's zoom/fullscreen state via its AX zoom button (`kAXZoomButtonAttribute`) or fullscreen button.
     static func performFullscreen(on windowInfo: [String: Any], accessibilityService: AccessibilityServiceProtocol) {
-        if pressWindowButton(
-            attribute: kAXZoomButtonAttribute,
-            on: windowInfo,
-            accessibilityService: accessibilityService
-        ) {
+        if let windowID = windowInfo[kCGWindowNumber as String] as? CGWindowID,
+           let window = accessibilityService.getWindow(forWindowID: windowID),
+           let fullScreen: Bool = accessibilityService.getAttributeValue("AXFullScreen", for: window),
+           accessibilityService.setFullScreen(!fullScreen, for: window) {
             return
         }
         if pressWindowButton(

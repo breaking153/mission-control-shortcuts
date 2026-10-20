@@ -27,23 +27,23 @@ Mission Control already shows you every open window. MCSC makes those previews
 actionable: point at one, type its app name, or flick two fingers, and the
 window closes, minimizes, tiles, quits, or ejects its disk image.
 
-It listens only while Mission Control is open. On the desktop, in Launchpad,
-and inside Finder folder stacks it stays completely silent, so your normal
-shortcuts never change. A keystroke pre-filter ensures typing in other apps
-costs MCSC zero Accessibility IPC. Everything runs event-driven in a
-single AppKit process that idles around 12 MB of RAM with 0% CPU (migrated and
-measured on macOS 27 with Mission Control open and closed; see
-[PERFORMANCE.md](./docs/PERFORMANCE.md)).
+Window shortcuts and gestures use their configured Mission Control, Dock,
+and title-bar scopes. The optional native traffic-light click margins also
+work on ordinary windows. Everything runs in a single AppKit process.
+Current memory measurements and remaining budget limitations are recorded in
+[Mission Control validation](./docs/MISSION_CONTROL.md).
 
 ## Features
 
+- **Persistent window labels**: Enable Always Show Window Labels in Settings → General to show window titles and application icons. The hovered preview uses its native label; moving away restores the custom label. Adjust position, icon placement, icon size, and title size independently. Labels hide when exiting Mission Control or switching desktops.
+- **Window controls**: Mission Control thumbnails offer ×, minimize, and fullscreen controls with adjustable button size. Tap × to close its window; hold for 1 second to quit its application. The progress ring appears after 0.25 seconds; releasing a partial hold cancels with a smooth retraction. Settings also expands normal-window traffic-light click areas independently.
 - **Type to find any window**: Start typing an app name inside Mission Control. Fuzzy matching ranks open windows instantly, marks the best match with a native highlight, and displays a Dock-style query pill. `Tab` cycles matches, and `Enter` focuses the window.
 - **14 trackpad gestures**: Pinch to close or force quit, swipe up to fill the screen, swipe down to minimize, and double-tap to resize. Each gesture includes a `Cmd` modifier variant for fourteen distinct actions under two fingers. Gestures fire once per finger lift to avoid accidental repeats.
 - **Tile and resize directly**: Fill the screen, expand by 33%, snap to 60%, or almost maximize to 90%, plus a reversible Make Smaller action that returns windows to their original size.
 - **Eject disk images from the overview**: Hover over a Finder window showing a mounted DMG, pinch in or press `Cmd+W`, and MCSC closes the window and unmounts the volume. No manual trip to the Finder sidebar.
 - **Feedback you can feel**: Every action flashes its corresponding SF Symbol at the cursor paired with a tactile click, confirming the action immediately.
 - **The Dock answers too**: Hover over Dock icons on the desktop to trigger app-level shortcuts and gestures. Point at a window preview for window actions, or point at the Dock for app actions. App Exposé stays suppressed mid-gesture.
-- **Strictly scoped**: Nothing is intercepted outside Mission Control.
+- **Scoped actions**: Window shortcuts and gestures follow their configured scopes; native window-button click margins can be enabled separately.
 - **Configurable**: Toggle individual shortcuts and gestures from the menu bar, or enable launch at login.
 
 ## Installation
@@ -61,7 +61,16 @@ System Settings → Privacy & Security → Accessibility
 The first launch prompts for it, and the app starts as soon as permission is granted.
 Without it, MCSC runs but cannot act on windows.
 
-### Homebrew (Recommended)
+### This fork's release (Recommended)
+
+Download the ZIP or DMG from the [latest release](https://github.com/breaking153/mission-control-shortcuts/releases/latest).
+The packaged app targets Apple Silicon and macOS 27.0 or later. Checksums and
+release-specific limitations are included with each release.
+
+### Upstream Homebrew distribution
+
+The upstream tap distributes the upstream application and does not include
+this fork's new features until they are adopted upstream.
 
 ```bash
 brew tap ShubhamJ010/tap
@@ -100,7 +109,7 @@ You can build and run MCSC either via the command line with `make` or via Xcode.
 #### Option A: Command Line with Makefile (Recommended)
 
 ```bash
-git clone https://github.com/ShubhamJ010/mission-control-shortcuts.git
+git clone https://github.com/breaking153/mission-control-shortcuts.git
 cd mission-control-shortcuts
 
 # Build, install to /Applications, and launch
@@ -119,7 +128,7 @@ make help        # View all available make targets
 #### Option B: Xcode
 
 ```bash
-git clone https://github.com/ShubhamJ010/mission-control-shortcuts.git
+git clone https://github.com/breaking153/mission-control-shortcuts.git
 cd mission-control-shortcuts
 open MCSC.xcodeproj
 ```
