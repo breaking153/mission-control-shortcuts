@@ -48,7 +48,16 @@ extension ShortcutViewModel {
             }
 
             let effectiveLocation = (location == .zero) ? self.currentAXMouseLocation() : location
-            let target = self.resolveTarget(at: effectiveLocation)
+            let target: TargetResolution = if self.missionControlService.isMissionControlActive,
+                                              self.config
+                                                  .matchedActions(keyCode: keyCode, includesShift: isShiftPressed)
+                                                  .contains(.fullscreen),
+                                              let window = self.hoverService.fullscreenWindow(at: effectiveLocation),
+                                              let windowID = window[kCGWindowNumber as String] as? CGWindowID {
+                .missionControlPreview(windowInfo: window, windowID: windowID)
+            } else {
+                self.resolveTarget(at: effectiveLocation)
+            }
             // Pure hover fact only — whether the toggle admits it is the
             // router's decision (`ShortcutActionRouter.isActive`). The MC
             // guard just skips needless AX IPC; the router admits everything

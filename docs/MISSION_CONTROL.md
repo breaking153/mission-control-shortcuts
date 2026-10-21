@@ -471,3 +471,34 @@ flowchart TB
 | Launchpad | `Dock` layers 27-29 | ❌ inactive |
 | Finder folder stack | only overlay (no Dock bar / WM overlay) | ❌ inactive |
 
+
+## Fullscreen Spaces and shortcuts (0.9.3)
+
+Fullscreen Spaces-bar tiles do not expose a window ID. The accessibility service
+resolves the native tile's local list index, and the Space service maps that
+index to the same display's ordered managed Spaces. Only a single-window
+fullscreen Space supplies an actionable window/PID pair; Split View groups
+remain excluded. Normal window-preview filtering still isolates the active
+desktop.
+
+Fullscreen shortcuts leave overview with unmodified Escape before resolving
+the captured AX window. Clearing modifiers matters when Command remains held.
+A bounded transition retry permits the captured desktop or fullscreen Space,
+and cancels on a replacement overview request or service stop.
+
+A native downward fullscreen drag captures one source window and the desktop
+displayed at mouse-up. After the fullscreen Space disappears, a runtime-checked
+window-management bridge restores that window to the captured desktop if macOS
+placed it elsewhere. Owner PID and destination are validated before moving.
+The legacy move API was observed to silently do nothing on this system. The
+correction has no idle timer and retains no AX tile or operation. Stop or a new
+left-button press cancels the transient context.
+
+On 21 October 2026, live automation reproduced the native wrong-desktop result
+(window on Desktop 1 while overview showed Desktop 2), then verified correction
+to Desktop 2, preview Command-R entry, fullscreen-tile Command-R exit to
+Desktop 2, five repeated sessions with visible controls and complete exit
+hiding, and quick X closing the owned helper. Synthetic mouse events needed
+real drag deltas and an expanded Spaces bar to exercise the native drag.
+Trackpad recognizers and their scroll-event exclusions were unchanged; this
+validation did not simulate physical two-finger input or multiple displays.

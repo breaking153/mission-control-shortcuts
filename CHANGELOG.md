@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.9.3 (21 Oct 2026)
+
+- **Reliable Mission Control Fullscreen Shortcut**: The configured fullscreen shortcut (including Command-R) now recognizes fullscreen thumbnails in the Spaces bar. Overview dismissal explicitly clears held modifiers, then retries window resolution during the native transition. Ordinary preview targeting retains desktop isolation.
+- **Return Fullscreen Windows to the Displayed Desktop**: Dragging a single-window fullscreen Space down into Mission Control restores that window to the desktop displayed at the drop, including Desktop 2. The correction validates the captured window and application identity and runs only during the transition; it adds no idle polling or dependency. Split View groups are excluded.
+
+- **Validation**: Live automation confirmed fullscreen drag restoration onto Desktop 2, Command-R entry from a preview and exit from a fullscreen Space tile, five repeated overview sessions with restored controls and complete exit hiding, and a real quick X closing the disposable window. Release build and static analysis passed; no repository test files were added.
+
+### Known limitations
+
+- Cold-launch physical footprints were 13,468,608 bytes for v0.9.2 and 13,484,992 bytes for the candidate (a 16 KiB difference). Both remain below 13 MiB; the strict decimal 13 MB ceiling is still unmet. Interaction memory is higher. No new leak-free claim is made.
+- Space restoration uses a runtime-checked private macOS bridge and depends on system availability. Multiple physical displays and Split View restoration were not validated.
+- Packaged builds require Apple Silicon and macOS 27.0 or later, use ad-hoc signing, and are not notarized. Updating may require removing and re-adding MCSC in System Settings → Privacy & Security → Accessibility. This fork does not update the upstream Homebrew tap.
+
 ## 0.9.2 (20 Oct 2026)
 
 - **Faster Hold to Quit**: Holding the Mission Control X now requests application quit after 0.75 seconds from mouse-down. The first 0.25 seconds still show no progress ring or shake; the visible progress fills over the remaining 0.5 seconds. Quick taps still close one window, and releasing between the tap and hold thresholds cancels.

@@ -10,6 +10,7 @@ func _AXUIElementGetWindow(_ element: AXUIElement, _ identifier: UnsafeMutablePo
 /// unit-tested with a mock. All methods use Quartz screen coordinates
 /// (origin at the top-left of the primary display) unless noted otherwise.
 protocol AccessibilityServiceProtocol {
+    func getMissionControlSpaceButtonIndex(at point: CGPoint) -> Int?
     /// Returns the topmost AX element at `point`, or `nil` if the hit test
     /// fails (e.g. over the desktop or when Accessibility is not granted).
     func getElement(at point: CGPoint) -> AXUIElement?
@@ -243,7 +244,7 @@ final class AccessibilityService: AccessibilityServiceProtocol {
     }
 
     /// Returns a cached `AXUIElement` for the WindowManager process.
-    private func getWindowManagerAXElement() -> AXUIElement? {
+    func getWindowManagerAXElement() -> AXUIElement? {
         guard let wmApp = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.WindowManager")
             .first
         else { return nil }

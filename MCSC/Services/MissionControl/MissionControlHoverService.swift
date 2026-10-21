@@ -32,10 +32,15 @@ protocol MissionControlHoverServiceProtocol: AnyObject {
 
     /// Executes an action (close, minimize, quit, fullscreen) on a Mission Control preview window,
     /// cleaning up the hover state and updating active window records.
+    func fullscreenWindow(at point: CGPoint) -> [String: Any]?
     func executeAction(mode: PreviewCloseButtonOverlay.Mode, on windowInfo: [String: Any])
 }
 
 extension MissionControlHoverServiceProtocol {
+    func fullscreenWindow(at _: CGPoint) -> [String: Any]? {
+        nil
+    }
+
     var windowButtonScale: CGFloat {
         get { 1.25 } set {}
     }
@@ -65,6 +70,7 @@ final class MissionControlHoverService: MissionControlHoverServiceProtocol {
     /// Exit intent precedes WindowManager's animation/AX exit notification.
     /// Keep labels suppressed until that session has actually ended.
     var isLabelDismissalPending = false
+    var fullscreenSpaceDrag: MissionControlFullscreenDrag?
     var pressedPreviewWindowID: CGWindowID?
     var closeButtonPress: MissionControlCloseButtonPress?
     var closeButtonHoldTimer: Timer?
@@ -329,6 +335,7 @@ final class MissionControlHoverService: MissionControlHoverServiceProtocol {
         guard isTracking else { return }
         overviewSessionGeneration &+= 1
         fullscreenRequestGeneration &+= 1
+        fullscreenSpaceDrag = nil
         isDragging = false
         isMouseDown = false
         pressedPreviewWindowID = nil
@@ -465,94 +472,6 @@ final class MissionControlHoverService: MissionControlHoverServiceProtocol {
         isControlHeld = controlPressed
         if !consumesCloseButtonMouseUp {
             overlay.setMode(currentOverlayMode)
-        }
-    }
-
-    func handleMouseDown(at location: CGPoint) -> Bool {
-        if consumesCloseButtonMouseUp {
-            cancelCloseButtonPress()
-            consumesCloseButtonMouseUp = false
-        }
-        guard isTracking && isSessionEnabled, isMissionControlActive || isMissionControlActiveProvider() else {
-            hideAllOverlays()
-            return false
-        }
-
-        guard isEnabled, let rect = overlayRect, rect.contains(location), overlay.isVisible,
-              let action = overlay.action(at: location),
-              let window = hoveredWindow else {
-            debugLog(
-                "handleMouseDown: click at \(location) outside overlay - hiding overlays and preparing drag",
-                category: AppLogger.missionControl
-            )
-            let previewID = labelsOverlay?.windowID(at: location)
-                ?? (currentPreviewFrame?.contains(location) == true
-                    ? hoveredWindow?[kCGWindowNumber as String] as? CGWindowID : nil)
-            isMouseDown = true
-            pressedPreviewWindowID = previewID
-            if let previewID {
-                // Native preview selection happens on mouse-up; keep the other
-                // labels visible while this press can still become a drag.
-                clearWindowLabelEntryScheduling()
-                labelsOverlay?.setDraggedWindowID(previewID)
-                hideCloseOverlay()
-                hideSearchOverlay()
-                return false
-            }
-            prepareForOverviewDismissal()
-            // Spaces controls can add/remove desktops without dismissing
-            // the overview. Resume only after its new layout is stable.
-            if isMissionControlSpaceControl(at: location) {
-                isLabelDismissalPending = false
-                beginSpaceTransition()
-            }
-            return false
-        }
-
-        debugLog(
-            "handleMouseDown: click at \(location) on overlay action \(action)",
-            category: AppLogger.missionControl
-        )
-        HapticService.perform(.pinchIn)
-        if action == .close, beginCloseButtonPress(on: window, at: location) {
-            return true
-        }
-        executeAction(mode: action, on: window)
-        return true
-    }
-
-    func handleMouseDragged(at location: CGPoint) {
-        if consumesCloseButtonMouseUp {
-            updateCloseButtonPress(at: location)
-            return
-        }
-        guard isTracking, isSessionEnabled, isMissionControlActive, isMouseDown else { return }
-        isDragging = true
-        hideCloseOverlay()
-        hideSearchOverlay()
-    }
-
-    func handleMouseUp(at _: CGPoint) {
-        guard isTracking, isSessionEnabled else {
-            isDragging = false
-            isMouseDown = false
-            pressedPreviewWindowID = nil
-            return
-        }
-        let wasDragging = isDragging
-        let selectedPreview = pressedPreviewWindowID != nil
-        isDragging = false
-        isMouseDown = false
-        pressedPreviewWindowID = nil
-        if wasDragging {
-            hoveredWindow = nil
-            currentPreviewFrame = nil
-            overlayRect = nil
-            beginSpaceTransition()
-        } else if selectedPreview {
-            prepareForOverviewDismissal()
-        } else if !isLabelDismissalPending, isMissionControlActive {
-            beginSpaceTransition()
         }
     }
 

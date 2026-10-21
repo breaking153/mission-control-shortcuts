@@ -21,6 +21,8 @@ import Cocoa
 /// These windows are considered present on the current space.
 @MainActor
 protocol SpaceManagementServiceProtocol: AnyObject {
+    func managedSpaces(on displayID: CGDirectDisplayID) -> [MissionControlSpace]
+    func moveWindow(_ windowID: CGWindowID, processID: pid_t, to spaceID: Int, on displayID: CGDirectDisplayID) -> Bool
     /// Returns the ManagedSpaceID of the active space on the main display, or nil if indeterminate.
     func currentSpaceID() -> Int?
 
@@ -36,13 +38,13 @@ protocol SpaceManagementServiceProtocol: AnyObject {
 
 @MainActor
 final class SpaceManagementService: SpaceManagementServiceProtocol {
-    private typealias CGSConnectionID = Int32
+    typealias CGSConnectionID = Int32
 
     @_silgen_name("CGSMainConnectionID")
-    private static func CGSMainConnectionID() -> CGSConnectionID
+    static func CGSMainConnectionID() -> CGSConnectionID
 
     @_silgen_name("CGSCopyManagedDisplaySpaces")
-    private static func CGSCopyManagedDisplaySpaces(_ cid: CGSConnectionID) -> CFArray?
+    static func CGSCopyManagedDisplaySpaces(_ cid: CGSConnectionID) -> CFArray?
 
     @_silgen_name("CGSCopySpacesForWindows")
     private static func CGSCopySpacesForWindows(_ cid: CGSConnectionID, _ mask: Int32, _ windowIDs: CFArray) -> CFArray?

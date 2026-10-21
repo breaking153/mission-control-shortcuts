@@ -193,3 +193,18 @@ flowchart LR
   MC -->|coalesced| SHR[share cached result]
 ```
 
+
+## 0.9.3 fullscreen transition comparison (21 October 2026)
+
+Cold-launch diagnostic samples with the same settings and Accessibility access:
+
+| Build | Physical footprint |
+|-------|--------------------|
+| Released 0.9.2 | 13,468,608 bytes |
+| Fullscreen candidate | 13,484,992 bytes |
+
+The difference is one 16 KiB page. Both samples are below 13 MiB, but neither
+passes a strict decimal 13,000,000-byte gate. These are cold-launch values, not
+interaction peaks or a new leak audit. The feature adds one optional transient
+struct and bounded callbacks during fullscreen transitions, with no dependency,
+idle timer, persistent AX tree, or retained bridge operation.
