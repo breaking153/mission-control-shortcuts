@@ -45,7 +45,7 @@
 - [x] Format, lint, Release build and analyze; expected exit 0, no format changes, no lint errors.
 - [x] Live-verify owned-window close/minimize, repeated entry/exit, native fullscreen and outside-overview delivery; expected one action and no leftover registrations.
 - [x] Compare cold memory, obtain fresh code review, address material findings, document actual evidence.
-- [ ] Install the verified build locally with a backup and verify Accessibility/native shortcuts after authorization if required.
+- [x] Install the verified build locally with a backup and verify Accessibility/native shortcuts after authorization if required.
 
 ## Execution record
 
@@ -63,3 +63,5 @@ Reuse the clean current checkout on a `codex/` branch, following the desktop pre
 - Evidence directory: `~/Library/Logs/MCSC/secure-input-investigation-20261025/`.
 
 - Local verified bundle installed at `/Applications/MCSC.app` with an official v0.9.3 backup. Binary SHA256 `bb7e19e698068774ae5f6e89acf696ffa30d098ebd92757723742e52858202a1` matches the validated candidate. Normal LaunchServices startup runs, but Accessibility denies the new signature; final normal-launch verification awaits user reauthorization. This is a local unreleased fix based on v0.9.3; no new release was published.
+
+- User reauthorized the installed bundle. A normal LaunchServices restart (PID 54421) confirmed Accessibility trusted and hover tracking active; cold physical footprint was 12,878,760 bytes. The installed binary independently passed normal/secure close, secure minimize, fullscreen, six ordinary overview cycles, ten rapid cycles with Secure Input still enabled, and ordinary foreground Command-W. Native registration/unregistration log counts balanced (19 sessions each). Owned test windows were removed; MCSC remains running outside overview with no active native reservations.
