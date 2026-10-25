@@ -89,6 +89,22 @@ Capturing keyboard events while Mission Control is open presents a unique macOS 
 - **Dedicated HID-level event tap:** MCSC installs `MCKeyboardTapService` at `.cghidEventTap` exclusively when Mission Control is active. This captures raw keystrokes before the WindowServer swallows them, enabling real-time fuzzy finding (`WindowSelectionEngine`).
 - **Private Exposé SPIs:** MCSC leverages learnings from the open-source community (specifically [OpenMissionControl PR #3](https://github.com/nohackjustnoobb/OpenMissionControl/pull/3/changes)) for handling low-level Exposé states and `CoreDockSendNotification` wake mechanisms.
 
+Configured Command shortcuts additionally use `MissionControlShortcutService`
+and the system's `RegisterEventHotKey` API while overview is active. This keeps
+specific registered chords available when another app holds Secure Input, which
+blocks raw keyboard taps. The service reserves only configured combinations,
+deduplicates shared bindings, refreshes on setting changes and unregisters on
+deactivation/stop. Successfully reserved chords pass through the raw event tap
+and execute once through the existing target resolver/router. Registration
+conflicts retain the raw path. Native dispatch force-checks the overview and
+registration generation so a queued event cannot operate after exit or in a
+replacement overview session.
+
+This does not expose ordinary text under Secure Input, change password-manager
+settings, or disable Secure Input. Type-to-search and outside-overview raw
+shortcuts retain the system restriction. The service is lazy, uses the already
+loaded HIToolbox framework and has no idle polling timer.
+
 ---
 
 ---

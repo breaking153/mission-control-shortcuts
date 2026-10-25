@@ -71,6 +71,37 @@ log show --predicate 'subsystem == "sj010.MCSC" AND category == "diagnostics"' -
 * **Issue indicators:**
   * `Event tap disabled by system (timeout); re-enabled.` -> System dropped event tap due to slow AX IPC or main thread delay.
   * `Failed to create event tap` -> Accessibility permissions missing.
+  * Tap enabled and Accessibility trusted, but no shortcut matches -> check
+    `IsSecureEventInputEnabled()`. Secure Input can starve raw keyboard taps
+    without disabling the tap itself. Restarting MCSC or toggling its permission
+    does not release another application's Secure Input ownership.
+  * `Mission Control native shortcuts registered: count=...` / `unregistered`
+    -> configured Command chords are reserved only during overview, including
+    when Secure Input is enabled. A registration warning reports a conflict;
+    that chord retains the previous raw-tap path and its Secure Input limitation.
+
+#### Repeated failure after lock/unlock: Bitwarden investigation (2026-10-25)
+
+With Bitwarden 2026.10.0 (71688), a controlled foreground/background/hide
+sequence reproduced Secure Input remaining enabled after Bitwarden lost focus.
+Hiding the same running Bitwarden process disabled Secure Input; the unchanged
+MCSC v0.9.3 then received Command-W and closed exactly one disposable window.
+This identifies the observed holder by a reversible state change. The
+`kCGSSessionSecureInputPID` values in IORegistry/session dictionaries alone are
+not reliable holder attribution: they differed and could track loginwindow or
+the foreground application during this investigation.
+
+MCSC uses system-registered hotkeys during Mission Control to avoid dependence
+on raw keyboard interception. It does not hide Bitwarden automatically, change
+vault/autolock settings, or disable another process's Secure Input. Ordinary
+type-to-search and shortcuts outside overview still depend on raw event access.
+For those features, hide the application holding Secure Input or resolve its
+password prompt. A chord pressed in the brief interval after overview closes
+but before its deactivation notification/scan can be discarded: native dispatch
+unregisters and refuses to act on an ordinary window. MCSC does not replay the
+chord through Secure Input; retry after the transition. See the matching upstream
+[Bitwarden issue](https://github.com/bitwarden/clients/issues/21964) and Apple's
+[Secure Event Input guidance](https://developer.apple.com/library/archive/technotes/tn2150/_index.html).
 
 ### `gesture`
 * **Normal:**

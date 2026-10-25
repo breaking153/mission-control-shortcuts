@@ -10,89 +10,101 @@ extension ShortcutViewModel {
         eventTapService.onShortcutDetected = { [weak self] keyCode, flags, location in
             guard let self else { return false }
 
-            // Detect Mission Control toggle keys (F3 = 99, Apple MC key = 160, Ctrl+Up = 126 with Control)
-            let isMCKey = keyCode == 99 || keyCode == 160 || (keyCode == 126 && flags.contains(.maskControl))
-            if isMCKey {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
-                    _ = self?.missionControlService.checkMissionControlActive(force: true)
+            // Registered chords belong to WindowServer during overview. Let
+            // them reach the native handler instead of executing twice.
+            if self.missionControlShortcutService?.owns(keyCode: keyCode, flags: flags) == true {
+                if self.missionControlService.checkMissionControlActive(force: true) {
+                    return false
                 }
+                self.missionControlShortcutService?.stop()
             }
+            return self.handleShortcut(keyCode: keyCode, flags: flags, location: location)
+        }
+    }
 
-            // If hoverService has not activated yet, check if Mission Control is active
-            if !self.hoverService.isMissionControlActive, self.config.isKeyboardNavigationEnabled,
-               self.missionControlService.isMissionControlActive {
-                self.hoverService.handleActivated()
+    func handleShortcut(keyCode: Int64, flags: CGEventFlags, location: CGPoint) -> Bool {
+        // Detect Mission Control toggle keys (F3 = 99, Apple MC key = 160, Ctrl+Up = 126 with Control)
+        let isMCKey = keyCode == 99 || keyCode == 160 || (keyCode == 126 && flags.contains(.maskControl))
+        if isMCKey {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+                _ = self?.missionControlService.checkMissionControlActive(force: true)
             }
+        }
 
-            // Cheap pre-filter BEFORE any AX IPC: plain typing (no Cmd) and
-            // unbound keys can never route, so skip the hit-test entirely.
-            // This keeps keystroke latency in other apps free of MCSC cost.
-            guard ShortcutActionRouter.isShortcutCandidate(
-                keyCode: keyCode,
-                flags: flags,
-                boundKeyCodes: self.config.boundKeyCodes
-            ) else {
-                return false
-            }
+        // If hoverService has not activated yet, check if Mission Control is active
+        if !self.hoverService.isMissionControlActive, self.config.isKeyboardNavigationEnabled,
+           self.missionControlService.isMissionControlActive {
+            self.hoverService.handleActivated()
+        }
 
-            let isCmdPressed = flags.contains(.maskCommand)
-            let isShiftPressed = flags.contains(.maskShift)
-            let isControlPressed = flags.contains(.maskControl)
-            let isOptionPressed = flags.contains(.maskAlternate)
+        // Cheap pre-filter BEFORE any AX IPC: plain typing (no Cmd) and
+        // unbound keys can never route, so skip the hit-test entirely.
+        // This keeps keystroke latency in other apps free of MCSC cost.
+        guard ShortcutActionRouter.isShortcutCandidate(
+            keyCode: keyCode,
+            flags: flags,
+            boundKeyCodes: self.config.boundKeyCodes
+        ) else {
+            return false
+        }
 
-            if isCmdPressed && !isShiftPressed && !isControlPressed && !isOptionPressed,
-               keyCode == ShortcutActionRouter.kKeySpace, self.config.isCmdSpaceEnabled,
-               !self.missionControlService.isSimulating, self.missionControlService.checkMissionControlActive() {
-                self.missionControlService.executeFixSequence()
-                return true
-            }
+        let isCmdPressed = flags.contains(.maskCommand)
+        let isShiftPressed = flags.contains(.maskShift)
+        let isControlPressed = flags.contains(.maskControl)
+        let isOptionPressed = flags.contains(.maskAlternate)
 
-            let effectiveLocation = (location == .zero) ? self.currentAXMouseLocation() : location
-            let target: TargetResolution = if self.missionControlService.isMissionControlActive,
-                                              self.config
-                                                  .matchedActions(keyCode: keyCode, includesShift: isShiftPressed)
-                                                  .contains(.fullscreen),
-                                              let window = self.hoverService.fullscreenWindow(at: effectiveLocation),
-                                              let windowID = window[kCGWindowNumber as String] as? CGWindowID {
-                .missionControlPreview(windowInfo: window, windowID: windowID)
-            } else {
-                self.resolveTarget(at: effectiveLocation)
-            }
-            // Pure hover fact only — whether the toggle admits it is the
-            // router's decision (`ShortcutActionRouter.isActive`). The MC
-            // guard just skips needless AX IPC; the router admits everything
-            // while Mission Control is open anyway.
-            var isTitleBarHover = false
-            if case let .window(window) = target, !self.missionControlService.isMissionControlActive {
-                isTitleBarHover = self.isTitleBarHover(window: window, at: effectiveLocation)
-            }
-            let resolution = self.shortcutRouter.routeShortcut(
-                keyCode: keyCode,
-                flags: flags,
-                location: effectiveLocation,
-                config: self.config,
-                isMissionControlActive: self.missionControlService.isMissionControlActive,
-                target: target,
-                service: self.accessibilityService,
-                volumeService: self.volumeService,
-                hoverService: self.hoverService,
-                isTitleBarHover: isTitleBarHover,
-                activateApp: { [weak self] loc in self?.activateApp(for: target, at: loc) }
+        if isCmdPressed && !isShiftPressed && !isControlPressed && !isOptionPressed,
+           keyCode == ShortcutActionRouter.kKeySpace, self.config.isCmdSpaceEnabled,
+           !self.missionControlService.isSimulating, self.missionControlService.checkMissionControlActive() {
+            self.missionControlService.executeFixSequence()
+            return true
+        }
+
+        let effectiveLocation = (location == .zero) ? self.currentAXMouseLocation() : location
+        let target: TargetResolution = if self.missionControlService.isMissionControlActive,
+                                          self.config
+                                              .matchedActions(keyCode: keyCode, includesShift: isShiftPressed)
+                                              .contains(.fullscreen),
+                                          let window = self.hoverService.fullscreenWindow(at: effectiveLocation),
+                                          let windowID = window[kCGWindowNumber as String] as? CGWindowID {
+            .missionControlPreview(windowInfo: window, windowID: windowID)
+        } else {
+            self.resolveTarget(at: effectiveLocation)
+        }
+        // Pure hover fact only — whether the toggle admits it is the
+        // router's decision (`ShortcutActionRouter.isActive`). The MC
+        // guard just skips needless AX IPC; the router admits everything
+        // while Mission Control is open anyway.
+        var isTitleBarHover = false
+        if case let .window(window) = target, !self.missionControlService.isMissionControlActive {
+            isTitleBarHover = self.isTitleBarHover(window: window, at: effectiveLocation)
+        }
+        let resolution = self.shortcutRouter.routeShortcut(
+            keyCode: keyCode,
+            flags: flags,
+            location: effectiveLocation,
+            config: self.config,
+            isMissionControlActive: self.missionControlService.isMissionControlActive,
+            target: target,
+            service: self.accessibilityService,
+            volumeService: self.volumeService,
+            hoverService: self.hoverService,
+            isTitleBarHover: isTitleBarHover,
+            activateApp: { [weak self] loc in self?.activateApp(for: target, at: loc) }
+        )
+
+        switch resolution {
+        case let .consumeAndExecute(feedbackMode, action):
+            AppLogger.eventTap.info("Shortcut matched and consumed: keyCode=\(keyCode, privacy: .public)")
+            self.executeFeedbackThenAction(
+                at: effectiveLocation,
+                feedbackMode: feedbackMode,
+                haptic: nil,
+                action: action
             )
-
-            switch resolution {
-            case let .consumeAndExecute(feedbackMode, action):
-                AppLogger.eventTap.info("Shortcut matched and consumed: keyCode=\(keyCode, privacy: .public)")
-                self.executeFeedbackThenAction(
-                    at: effectiveLocation,
-                    feedbackMode: feedbackMode,
-                    haptic: nil,
-                    action: action
-                )
-                return true
-            case .ignore:
-                return false
-            }
+            return true
+        case .ignore:
+            return false
         }
     }
 

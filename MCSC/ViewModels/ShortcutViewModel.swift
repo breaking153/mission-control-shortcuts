@@ -20,6 +20,7 @@ final class ShortcutViewModel {
     let accessibilityService: AccessibilityServiceProtocol
     let missionControlService: MissionControlServiceProtocol
     var nativeWindowButtonHitService: NativeWindowButtonHitService?
+    var missionControlShortcutService: MissionControlShortcutService?
     private let launchAtLoginService: LaunchAtLoginService
 
     lazy var multitouchService = MultitouchService()
@@ -93,7 +94,14 @@ final class ShortcutViewModel {
     lazy var shortcutRouter = ShortcutActionRouter(actions: actionRegistry)
     lazy var gestureRouter = GestureActionRouter(actions: actionRegistry)
 
-    var config = ShortcutConfiguration()
+    var config = ShortcutConfiguration() {
+        didSet {
+            if config.shortcutBindings != oldValue.shortcutBindings || config.isCmdSpaceEnabled != oldValue
+                .isCmdSpaceEnabled {
+                syncMissionControlShortcuts()
+            }
+        }
+    }
 
     /// Gesture action mappings
     func gestureAction(for kind: GestureKind, isCmd: Bool) -> GestureAction {
@@ -155,6 +163,7 @@ final class ShortcutViewModel {
         // Cooldown after Mission Control activates to avoid false gesture detection, and notify hoverService.
         missionControlService.onActivated = { [weak self] in
             guard let self else { return }
+            self.syncMissionControlShortcuts()
             self.nativeWindowButtonHitService?.cancelPendingPress()
             self.gestureCooldownUntil = CACurrentMediaTime() + 0.5
             if self.hadThreeOrMoreTouches {
@@ -165,6 +174,7 @@ final class ShortcutViewModel {
         }
         missionControlService.onDeactivated = { [weak self] in
             guard let self else { return }
+            self.missionControlShortcutService?.stop()
             self.hoverService.handleDeactivated()
             self.syncMultitouchLifecycle()
         }
@@ -369,6 +379,7 @@ final class ShortcutViewModel {
         let wasListening = multitouchService.isListening
         eventTapService.start()
         missionControlService.start()
+        syncMissionControlShortcuts()
 
         // Only spin up services whose features are actually enabled.
         // This avoids dlopen-ing MultitouchSupport.framework (~60-120 Hz
@@ -388,6 +399,7 @@ final class ShortcutViewModel {
     }
 
     func stop() {
+        missionControlShortcutService?.stop()
         nativeWindowButtonHitService?.stop()
         gestureCooldownUntil = 0
         hadThreeOrMoreTouches = false
